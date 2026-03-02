@@ -497,7 +497,7 @@ class TNPStatsDialog(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("TNP References")
+        self.setWindowTitle(tr("TNP References"))
         self.setMinimumSize(300, 400)
 
         layout = QVBoxLayout(self)

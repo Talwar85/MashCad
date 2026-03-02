@@ -294,7 +294,7 @@ class TutorialProgressPanel(QFrame):
         layout.addWidget(self.card)
         
         # Skip Button
-        skip = QPushButton("Tutorial überspringen")
+        skip = QPushButton(tr("Skip Tutorial"))
         skip.setStyleSheet("""
             QPushButton {
                 background: transparent;

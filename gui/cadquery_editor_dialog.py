@@ -191,7 +191,7 @@ class CadQueryEditorDialog(QDialog):
 
     def _setup_ui(self):
         """Setup the dialog UI."""
-        self.setWindowTitle("CadQuery Script Editor")
+        self.setWindowTitle(tr("CadQuery Script Editor"))
         self.resize(900, 700)
 
         layout = QVBoxLayout(self)
@@ -231,20 +231,20 @@ class CadQueryEditorDialog(QDialog):
         toolbar.setSpacing(8)
 
         # Load button
-        self.load_btn = QPushButton("Load")
-        self.load_btn.setToolTip("Load script from file")
+        self.load_btn = QPushButton(tr("Load"))
+        self.load_btn.setToolTip(tr("Load script from file"))
         toolbar.addWidget(self.load_btn)
 
         # Save button
-        self.save_btn = QPushButton("Save")
-        self.save_btn.setToolTip("Save script to file")
+        self.save_btn = QPushButton(tr("Save"))
+        self.save_btn.setToolTip(tr("Save script to file"))
         toolbar.addWidget(self.save_btn)
 
         toolbar.addStretch()
 
         # Execute button
-        self.execute_btn = QPushButton("Execute")
-        self.execute_btn.setToolTip("Execute script and create geometry")
+        self.execute_btn = QPushButton(tr("Execute"))
+        self.execute_btn.setToolTip(tr("Execute script and create geometry"))
         self.execute_btn.setProperty("primary", True)
         toolbar.addWidget(self.execute_btn)
 

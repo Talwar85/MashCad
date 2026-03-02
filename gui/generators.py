@@ -372,30 +372,30 @@ class GearDialog(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Zahnrad Generator")
+        self.setWindowTitle(tr("Gear Generator"))
         self.setMinimumWidth(300)
-        
+
         layout = QVBoxLayout(self)
-        
+
         # Parameter
         form = QFormLayout()
-        
+
         self.teeth_spin = QSpinBox()
         self.teeth_spin.setRange(6, 200)
         self.teeth_spin.setValue(20)
-        form.addRow("Zähnezahl:", self.teeth_spin)
-        
+        form.addRow(tr("Teeth:"), self.teeth_spin)
+
         self.module_spin = QDoubleSpinBox()
         self.module_spin.setRange(0.5, 20)
         self.module_spin.setValue(2.0)
         self.module_spin.setSuffix(" mm")
-        form.addRow("Modul:", self.module_spin)
-        
+        form.addRow(tr("Module:"), self.module_spin)
+
         self.hole_spin = QDoubleSpinBox()
         self.hole_spin.setRange(0, 100)
         self.hole_spin.setValue(5.0)
         self.hole_spin.setSuffix(" mm")
-        form.addRow("Bohrung ⌀:", self.hole_spin)
+        form.addRow(tr("Bore Diameter:"), self.hole_spin)
         
         self.pressure_spin = QDoubleSpinBox()
         self.pressure_spin.setRange(14.5, 25)
@@ -444,28 +444,28 @@ class StarDialog(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Stern Generator")
+        self.setWindowTitle(tr("Star Generator"))
         self.setMinimumWidth(280)
-        
+
         layout = QVBoxLayout(self)
         form = QFormLayout()
-        
+
         self.points_spin = QSpinBox()
         self.points_spin.setRange(3, 32)
         self.points_spin.setValue(5)
-        form.addRow("Zacken:", self.points_spin)
-        
+        form.addRow(tr("Points:"), self.points_spin)
+
         self.outer_spin = QDoubleSpinBox()
         self.outer_spin.setRange(1, 1000)
         self.outer_spin.setValue(30)
         self.outer_spin.setSuffix(" mm")
-        form.addRow("Außenradius:", self.outer_spin)
-        
+        form.addRow(tr("Outer Radius:"), self.outer_spin)
+
         self.inner_spin = QDoubleSpinBox()
         self.inner_spin.setRange(1, 1000)
         self.inner_spin.setValue(15)
         self.inner_spin.setSuffix(" mm")
-        form.addRow("Innenradius:", self.inner_spin)
+        form.addRow(tr("Inner Radius:"), self.inner_spin)
         
         layout.addLayout(form)
         

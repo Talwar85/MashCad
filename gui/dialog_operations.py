@@ -208,7 +208,7 @@ class DialogMixin:
             
             # 4. Show as dialog (non-modal)
             dialog = QDialog(self)
-            dialog.setWindowTitle("STL to CAD Reconstruction")
+            dialog.setWindowTitle(tr("STL to CAD Reconstruction"))
             dialog.setMinimumSize(500, 700)
             dialog.setModal(False)
             

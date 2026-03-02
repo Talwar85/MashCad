@@ -68,7 +68,7 @@ class MainWindow(
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MashCAD")
+        self.setWindowTitle(tr("MashCAD"))
         self.setMinimumSize(1400, 900)
 
         # Window Icon setzen

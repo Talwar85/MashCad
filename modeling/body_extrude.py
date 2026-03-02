@@ -28,8 +28,8 @@ class BodyExtrudeMixin:
         """
         Extrudiert eine Face aus gespeicherten BREP-Daten.
 
-        Wird verwendet fÃ¼r Push/Pull auf nicht-planaren FlÃ¤chen (Zylinder, etc.),
-        wo keine Polygon-Extraktion mÃ¶glich ist.
+        Wird verwendet für Push/Pull auf nicht-planaren Flächen (Zylinder, etc.),
+        wo keine Polygon-Extraktion möglich ist.
 
         Delegiert an OCPExtrudeHelper.extrude() als kanonische BRepPrimAPI-Implementierung.
         """
@@ -108,12 +108,12 @@ class BodyExtrudeMixin:
 
         Dieser Pfad verwendet den OCPExtrudeHelper der:
         - OCP-PRIMARY ist (kein Build123d Fallback)
-        - Verbindliche TNP Integration durchfÃ¼hrt
+        - Verbindliche TNP Integration durchführt
         - Alle Faces/Edges im ShapeNamingService registriert
         """
         from modeling.tnp_system import ShapeNamingService
         
-        # Phase 2: PrÃ¼fe Geometrie-Quelle
+        # Phase 2: Prüfe Geometrie-Quelle
         has_sketch = feature.sketch is not None
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
         has_face_brep = hasattr(feature, 'face_brep') and feature.face_brep
@@ -185,7 +185,7 @@ class BodyExtrudeMixin:
                         logger.info(f"[OCP-FIRST] {len(polys_to_extrude)}/{len(sketch_profiles)} Profile via Selektor")
                     else:
                         logger.error(f"[OCP-FIRST] Selektor-Match fehlgeschlagen! Selector: {profile_selector}")
-                        raise ValueError("Profile-Selektor hat kein Match - keine Extrusion mÃ¶glich")
+                        raise ValueError("Profile-Selektor hat kein Match - keine Extrusion möglich")
                 elif sketch_profiles:
                     polys_to_extrude = self._convert_line_profiles_to_polygons(sketch_profiles)
                     logger.info(f"[OCP-FIRST] Alle {len(polys_to_extrude)} Profile (kein Selektor)")
@@ -234,7 +234,7 @@ class BodyExtrudeMixin:
                     if isinstance(poly, dict):
                         continue
 
-                    coords = list(poly.exterior.coords)[:-1]  # Shapely schlieÃŸt Polygon
+                    coords = list(poly.exterior.coords)[:-1]  # Shapely schließt Polygon
                     if len(coords) < 3:
                         continue
 
@@ -359,10 +359,10 @@ class BodyExtrudeMixin:
 
     def _compute_extrude_part_brepfeat(self, feature, current_solid):
         """
-        Push/Pull Extrusion fÃ¼r Body-Faces mit BRepFeat_MakePrism.
+        Push/Pull Extrusion für Body-Faces mit BRepFeat_MakePrism.
         
         Delegiert an die kanonische brepfeat_prism() Implementierung
-        in brepfeat_operations.py fÃ¼r konsistente Normal-Berechnung
+        in brepfeat_operations.py für konsistente Normal-Berechnung
         und Sketch-Face-Erkennung.
         """
         from modeling.brepfeat_operations import brepfeat_prism
@@ -371,17 +371,17 @@ class BodyExtrudeMixin:
         import uuid
 
         if current_solid is None:
-            raise ValueError("Push/Pull Extrusion benÃ¶tigt einen aktuellen Solid")
+            raise ValueError("Push/Pull Extrusion benötigt einen aktuellen Solid")
 
         # Feature-ID sicherstellen
         if not hasattr(feature, 'id') or feature.id is None:
             feature.id = str(uuid.uuid4())[:8]
 
-        # Face-Referenz auflÃ¶sen
+        # Face-Referenz auflösen
         face_to_extrude = None
         resolved_face_index = None  # Track resolved index for healing
         
-        # 1. Versuche Face Ã¼ber ShapeID
+        # 1. Versuche Face über ShapeID
         if hasattr(feature, 'face_shape_id') and feature.face_shape_id:
             if self._document and hasattr(self._document, '_shape_naming_service'):
                 try:
@@ -401,15 +401,15 @@ class BodyExtrudeMixin:
                         except Exception:
                             pass  # Index healing is optional
                 except Exception as e:
-                    logger.debug(f"Push/Pull: Face-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
+                    logger.debug(f"Push/Pull: Face-ShapeID Auflösung fehlgeschlagen: {e}")
 
-        # 2. Versuche Face Ã¼ber Index
+        # 2. Versuche Face über Index
         if face_to_extrude is None and hasattr(feature, 'face_index') and feature.face_index is not None:
             try:
                 from modeling.topology_indexing import face_from_index
                 face_to_extrude = face_from_index(current_solid, int(feature.face_index))
             except Exception as e:
-                logger.debug(f"Push/Pull: Face-Index AuflÃ¶sung fehlgeschlagen: {e}")
+                logger.debug(f"Push/Pull: Face-Index Auflösung fehlgeschlagen: {e}")
 
         # 3. Versuche Face aus BREP
         if face_to_extrude is None and hasattr(feature, 'face_brep') and feature.face_brep:
@@ -433,7 +433,7 @@ class BodyExtrudeMixin:
                 logger.debug(f"Push/Pull: Face-BREP Deserialisierung fehlgeschlagen: {e}")
 
         if face_to_extrude is None:
-            raise ValueError("Push/Pull: Keine Face-Referenz auflÃ¶sbar")
+            raise ValueError("Push/Pull: Keine Face-Referenz auflösbar")
 
         # OCP Face extrahieren
         ocp_face = face_to_extrude.wrapped if hasattr(face_to_extrude, 'wrapped') else face_to_extrude
@@ -628,7 +628,7 @@ class BodyExtrudeMixin:
         TNP v4.1: Erstellt native OCP Ellipse Faces aus Sketch-Ellipsen.
 
         Ellipsen sind geschlossene Kurven. Wir erstellen eine planare Face
-        aus der vollen Ellipse fÃ¼r Extrusion.
+        aus der vollen Ellipse für Extrusion.
         """
         from build123d import Face, Vector
         from OCP.GC import GC_MakeEllipse
@@ -817,7 +817,7 @@ class BodyExtrudeMixin:
         lines = slot_data.get('lines', [])
 
         if len(arcs) != 2 or len(lines) < 2:
-            logger.warning(f"[W34] UngÃ¼ltige Slot-Struktur: {len(arcs)} Arcs, {len(lines)} Linien")
+            logger.warning(f"[W34] Ungültige Slot-Struktur: {len(arcs)} Arcs, {len(lines)} Linien")
             return faces
 
         try:

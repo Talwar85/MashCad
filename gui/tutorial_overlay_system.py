@@ -115,7 +115,7 @@ class SpotlightOverlay(QWidget):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         
-        self.next_btn = QPushButton("Weiter →")
+        self.next_btn = QPushButton(tr("Next →"))
         self.next_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(
@@ -375,7 +375,7 @@ class TutorialSidePanel(QFrame):
         
         nav_layout.addStretch()
         
-        self.next_btn = QPushButton("Weiter →")
+        self.next_btn = QPushButton(tr("Next →"))
         self.next_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(

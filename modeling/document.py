@@ -63,7 +63,7 @@ class Document:
     """
     Dokument mit optionalem Assembly-System.
 
-    Phase 1 Assembly: UnterstÃ¼tzt hierarchische Component-Struktur.
+    Phase 1 Assembly: Unterstützt hierarchische Component-Struktur.
     Backward-compatible: Alte Projekte laden weiterhin korrekt.
     """
 
@@ -72,7 +72,7 @@ class Document:
         self.active_body: Optional[Body] = None
         self.active_sketch: Optional[Sketch] = None
         
-        # TNP v4.0: Shape Naming Service fÃ¼r persistente Shape-Referenzen
+        # TNP v4.0: Shape Naming Service für persistente Shape-Referenzen
         from modeling.tnp_system import ShapeNamingService
         self._shape_naming_service = ShapeNamingService(name)
         self._tnp_v5_service = self._shape_naming_service
@@ -137,7 +137,7 @@ class Document:
 
     @property
     def active_component(self) -> Optional[Component]:
-        """Gibt die aktive Component zurÃ¼ck."""
+        """Gibt die aktive Component zurück."""
         return self._active_component
 
     def set_active_component(self, comp: Component) -> bool:
@@ -160,7 +160,7 @@ class Document:
 
     def get_all_bodies(self) -> List[Body]:
         """
-        Gibt alle Bodies im Dokument zurÃ¼ck (rekursiv).
+        Gibt alle Bodies im Dokument zurück (rekursiv).
 
         Returns:
             Liste aller Bodies
@@ -170,7 +170,7 @@ class Document:
         return []
 
     def get_all_sketches(self) -> List[Sketch]:
-        """Gibt alle Sketches im Dokument zurÃ¼ck (rekursiv)."""
+        """Gibt alle Sketches im Dokument zurück (rekursiv)."""
         if self.root_component:
             return self.root_component.get_all_sketches(recursive=True)
         return []
@@ -182,7 +182,7 @@ class Document:
         return None
 
     def find_body_component(self, body: Body) -> Optional[Component]:
-        """Findet die Component, die den angegebenen Body enthÃ¤lt."""
+        """Findet die Component, die den angegebenen Body enthält."""
         if body is None or self.root_component is None:
             return None
 
@@ -224,7 +224,7 @@ class Document:
         return b
 
     def add_body(self, body: Body, component: Component = None, set_active: bool = False):
-        """FÃ¼gt einen Body dem Dokument hinzu und setzt die Document-Referenz."""
+        """Fügt einen Body dem Dokument hinzu und setzt die Document-Referenz."""
         if body is None:
             return None
 
@@ -247,7 +247,7 @@ class Document:
 
     def split_body(self, body: Body, plane_origin: tuple, plane_normal: tuple) -> Tuple[Body, Body]:
         """
-        Teilt einen Body in 2 HÃ¤lften und fÃ¼gt beide zum Document hinzu.
+        Teilt einen Body in 2 Hälften und fügt beide zum Document hinzu.
 
         Multi-Body Split Architecture (AGENTS.md Phase 3):
         - Erstellt SplitFeature mit keep_side="both"
@@ -264,7 +264,7 @@ class Document:
             (body_above, body_below) - beide Bodies im Document registriert
 
         Raises:
-            ValueError: Wenn Split fehlschlÃ¤gt
+            ValueError: Wenn Split fehlschlägt
         """
         from build123d import Solid
 
@@ -275,11 +275,11 @@ class Document:
             keep_side="both"  # Explizit beide behalten
         )
 
-        # 2. Feature zu Original-Body hinzufÃ¼gen (ohne Rebuild - wir wollen SplitResult)
+        # 2. Feature zu Original-Body hinzufügen (ohne Rebuild - wir wollen SplitResult)
         body.features.append(split_feat)
         split_index = len(body.features) - 1
 
-        # 3. _compute_split aufrufen â†’ SplitResult
+        # 3. _compute_split aufrufen → SplitResult
         try:
             split_result = body._compute_split(split_feat, body._build123d_solid)
         except Exception as e:
@@ -290,7 +290,7 @@ class Document:
         # Validierung: Muss SplitResult sein
         if not isinstance(split_result, SplitResult):
             body.features.pop()
-            raise ValueError("Split mit keep_side='both' muss SplitResult zurÃ¼ckgeben")
+            raise ValueError("Split mit keep_side='both' muss SplitResult zurückgeben")
 
         # 4. Beide Bodies erstellen mit shared history
         body_above = Body(name=f"{body.name}_above", document=self)
@@ -318,15 +318,15 @@ class Document:
                 f"Split: Original-Body '{body.name}' aus Component '{target_component.name}' entfernt"
             )
 
-        # 6. Beide neue Bodies in derselben Component hinzufÃ¼gen
+        # 6. Beide neue Bodies in derselben Component hinzufügen
         self.add_body(body_above, component=target_component, set_active=False)
         self.add_body(body_below, component=target_component, set_active=False)
 
-        # Invalidate meshes fÃ¼r beide Bodies
+        # Invalidate meshes für beide Bodies
         body_above.invalidate_mesh()
         body_below.invalidate_mesh()
 
-        logger.debug(f"Split: '{body.name}' â†’ '{body_above.name}' + '{body_below.name}'")
+        logger.debug(f"Split: '{body.name}' → '{body_above.name}' + '{body_below.name}'")
 
         # 7. Setze einen der Bodies als aktiv (optional - user kann das auch manuell machen)
         if self.active_body == body:
@@ -458,7 +458,7 @@ class Document:
         Persistiert immer im Component-basierten Format (v9+).
 
         Returns:
-            Dictionary fÃ¼r JSON-Serialisierung
+            Dictionary für JSON-Serialisierung
         """
         # Parameter speichern
         try:
@@ -487,7 +487,7 @@ class Document:
         """
         Deserialisiert Dokument aus Dictionary.
 
-        LÃ¤dt primÃ¤r Component-Format (v9+). Flat-Format-Daten werden
+        Lädt primär Component-Format (v9+). Flat-Format-Daten werden
         on-the-fly in eine Root-Component migriert.
 
         Args:
@@ -528,7 +528,7 @@ class Document:
         logger.info(f"[ASSEMBLY] Lade Component-Format v{version}")
         doc._load_assembly_format(payload)
 
-        # KRITISCH fÃ¼r parametrisches CAD: Sketch-Referenzen in Features wiederherstellen
+        # KRITISCH für parametrisches CAD: Sketch-Referenzen in Features wiederherstellen
         doc._restore_sketch_references()
 
         # Logging
@@ -538,7 +538,7 @@ class Document:
         return doc
 
     def _load_assembly_format(self, data: dict):
-        """LÃ¤dt Dokument aus Assembly-Format (v9.0+)."""
+        """Lädt Dokument aus Assembly-Format (v9.0+)."""
         # Root Component laden
         root_data = data.get("root_component", {})
         if root_data:
@@ -612,7 +612,7 @@ class Document:
 
     @staticmethod
     def _iter_component_payloads(component_data: dict):
-        """Iteriert rekursiv Ã¼ber Component-Dicts eines Payloads."""
+        """Iteriert rekursiv über Component-Dicts eines Payloads."""
         if not isinstance(component_data, dict):
             return
         yield component_data
@@ -668,7 +668,7 @@ class Document:
     def _restore_sketch_references(self):
         """
         Stellt Sketch-Referenzen in Features wieder her (nach dem Laden).
-        ErmÃ¶glicht parametrische Updates wenn Sketches geÃ¤ndert werden.
+        Ermöglicht parametrische Updates wenn Sketches geändert werden.
 
         Funktioniert mit beiden Modi (Legacy und Assembly).
         """
@@ -685,7 +685,7 @@ class Document:
                 if sketch_id and sketch_id in sketch_map:
                     feature.sketch = sketch_map[sketch_id]
                     restored_count += 1
-                    logger.debug(f"Sketch-Referenz wiederhergestellt: {feature.name} â†’ {sketch_map[sketch_id].name}")
+                    logger.debug(f"Sketch-Referenz wiederhergestellt: {feature.name} → {sketch_map[sketch_id].name}")
 
         if restored_count > 0:
             logger.info(f"[PARAMETRIC] {restored_count} Sketch-Referenzen wiederhergestellt")
@@ -1011,9 +1011,9 @@ class Document:
         synchronizes edge_shape_ids from stable edge_indices for strict edge features.
 
         Hintergrund:
-        Nach Save/Load kÃ¶nnen gespeicherte edge_shape_ids stale sein, obwohl edge_indices
-        weiterhin korrekt auflÃ¶sbar sind. FÃ¼r Fillet/Chamfer sollen shape_ids danach
-        auf die aktuell indexaufgelÃ¶sten Kanten zeigen.
+        Nach Save/Load können gespeicherte edge_shape_ids stale sein, obwohl edge_indices
+        weiterhin korrekt auflösbar sind. Für Fillet/Chamfer sollen shape_ids danach
+        auf die aktuell indexaufgelösten Kanten zeigen.
         """
         service = getattr(self, "_shape_naming_service", None)
         if service is None:
@@ -1362,7 +1362,7 @@ class Document:
             import numpy as np
 
             class _ProjectEncoder(json.JSONEncoder):
-                """JSON Encoder fÃ¼r Projekt-Daten mit UnterstÃ¼tzung fÃ¼r NumPy und Geometrie-Objekte."""
+                """JSON Encoder für Projekt-Daten mit Unterstützung für NumPy und Geometrie-Objekte."""
                 def default(self, obj):
                     # NumPy-Typen
                     if isinstance(obj, (np.integer,)):
@@ -1391,7 +1391,7 @@ class Document:
     @classmethod
     def load_project(cls, filename: str) -> Optional['Document']:
         """
-        LÃ¤dt Projekt aus MashCAD-Datei (.mshcad).
+        Lädt Projekt aus MashCAD-Datei (.mshcad).
 
         Args:
             filename: Pfad zur Projektdatei
@@ -1416,7 +1416,7 @@ class Document:
             # Bodies: BREP direkt laden oder Rebuild als Fallback
             for body in doc.get_all_bodies():
                 if body._build123d_solid is not None:
-                    logger.debug(f"Body '{body.name}': BREP direkt geladen (kein Rebuild nÃ¶tig)")
+                    logger.debug(f"Body '{body.name}': BREP direkt geladen (kein Rebuild nötig)")
                 elif body.features:
                     try:
                         body._rebuild()
@@ -1424,7 +1424,7 @@ class Document:
                     except Exception as e:
                         logger.warning(f"Body '{body.name}' rebuild fehlgeschlagen: {e}")
 
-            # Einmalige Legacy-Migration fÃ¼r NSided edge_selectors -> edge_indices/ShapeIDs.
+            # Einmalige Legacy-Migration für NSided edge_selectors -> edge_indices/ShapeIDs.
             migrated_nsided = doc._migrate_loaded_nsided_features_to_indices()
             migrated_face_refs = doc._migrate_loaded_face_refs_to_indices()
             seeded_shape_refs = doc._rehydrate_shape_naming_service_from_loaded_bodies()
@@ -1467,7 +1467,7 @@ class Document:
             return doc
 
         except json.JSONDecodeError as e:
-            logger.error(f"UngÃ¼ltiges JSON in Projektdatei: {e}")
+            logger.error(f"Ungültiges JSON in Projektdatei: {e}")
             return None
         except Exception as e:
             logger.error(f"Projekt konnte nicht geladen werden: {e}")

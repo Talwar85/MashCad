@@ -936,7 +936,7 @@ class TutorialControlPanel(QFrame):
         
         nav_layout.addStretch()
         
-        self.next_btn = QPushButton("Weiter →")
+        self.next_btn = QPushButton(tr("Next →"))
         self.next_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(
@@ -1344,7 +1344,7 @@ class ImmersiveTutorial(QDialog):
         
         from PySide6.QtWidgets import QMessageBox
         box = QMessageBox(self)
-        box.setWindowTitle("🏆 Tutorial Complete!")
+        box.setWindowTitle(tr("🏆 Tutorial Complete!"))
         box.setTextFormat(Qt.RichText)
         box.setText(msg)
         box.setIcon(QMessageBox.Information)

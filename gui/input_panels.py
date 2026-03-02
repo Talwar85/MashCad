@@ -177,14 +177,14 @@ class ExtrudeInputPanel(RoundedPanelFrame):
         body.addWidget(self.height_input, 0, 1)
 
         # Flip Direction Button
-        self.flip_btn = QPushButton("<->")
+        self.flip_btn = QPushButton(tr("<->"))
         self.flip_btn.setToolTip(tr("Flip direction (F)"))
         self.flip_btn.setObjectName("ghost")
         self.flip_btn.clicked.connect(self._flip_direction)
         body.addWidget(self.flip_btn, 0, 2)
 
         # "To Face" Button
-        self.to_face_btn = QPushButton("To")
+        self.to_face_btn = QPushButton(tr("To"))
         self.to_face_btn.setToolTip(tr("Extrude to face (T)"))
         self.to_face_btn.setCheckable(True)
         self.to_face_btn.setObjectName("toggle")
@@ -197,7 +197,7 @@ class ExtrudeInputPanel(RoundedPanelFrame):
         actions = QHBoxLayout()
         actions.setSpacing(8)
 
-        self.btn_vis = QPushButton("Vis")
+        self.btn_vis = QPushButton(tr("Vis"))
         self.btn_vis.setCheckable(False)  # 3-Stufen-Toggle statt an/aus
         self.btn_vis.setToolTip(tr("Bodies visible (click -> X-Ray)"))
         self.btn_vis.clicked.connect(self._toggle_vis)
@@ -206,12 +206,12 @@ class ExtrudeInputPanel(RoundedPanelFrame):
 
         actions.addStretch()
 
-        self.btn_ok = QPushButton("OK")
+        self.btn_ok = QPushButton(tr("OK"))
         self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
         actions.addWidget(self.btn_ok)
 
-        self.btn_cancel = QPushButton("X")
+        self.btn_cancel = QPushButton(tr("X"))
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         actions.addWidget(self.btn_cancel)
@@ -432,12 +432,12 @@ class FilletChamferPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.ok_btn = QPushButton("OK")
+        self.ok_btn = QPushButton(tr("OK"))
         self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
         actions.addWidget(self.ok_btn)
 
-        self.cancel_btn = QPushButton("X")
+        self.cancel_btn = QPushButton(tr("X"))
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
         actions.addWidget(self.cancel_btn)
@@ -587,12 +587,12 @@ class ShellInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.ok_btn = QPushButton("OK")
+        self.ok_btn = QPushButton(tr("OK"))
         self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
         actions.addWidget(self.ok_btn)
 
-        self.cancel_btn = QPushButton("X")
+        self.cancel_btn = QPushButton(tr("X"))
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
         actions.addWidget(self.cancel_btn)
@@ -756,7 +756,7 @@ class SweepInputPanel(RoundedPanelFrame):
         self.profile_status.setStyleSheet("color: #b08a6a; font-size: 12px; border: none;")
         profile_layout.addWidget(self.profile_status)
 
-        self.profile_clear_btn = QPushButton("x")
+        self.profile_clear_btn = QPushButton(tr("x"))
         self.profile_clear_btn.setFixedSize(18, 18)
         self.profile_clear_btn.setObjectName("ghost")
         self.profile_clear_btn.setToolTip(tr("Clear profile selection"))
@@ -774,7 +774,7 @@ class SweepInputPanel(RoundedPanelFrame):
         self.path_status.setStyleSheet("color: #b08a6a; font-size: 12px; border: none;")
         path_layout.addWidget(self.path_status)
 
-        self.path_clear_btn = QPushButton("x")
+        self.path_clear_btn = QPushButton(tr("x"))
         self.path_clear_btn.setFixedSize(18, 18)
         self.path_clear_btn.setObjectName("ghost")
         self.path_clear_btn.setToolTip(tr("Clear path selection"))
@@ -848,13 +848,13 @@ class SweepInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.ok_btn = QPushButton("OK")
+        self.ok_btn = QPushButton(tr("OK"))
         self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
         self.ok_btn.setEnabled(False)  # Disabled until profile and path selected
         actions.addWidget(self.ok_btn)
 
-        self.cancel_btn = QPushButton("X")
+        self.cancel_btn = QPushButton(tr("X"))
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
         actions.addWidget(self.cancel_btn)
@@ -1093,13 +1093,13 @@ class LoftInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.ok_btn = QPushButton("OK")
+        self.ok_btn = QPushButton(tr("OK"))
         self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
         self.ok_btn.setEnabled(False)  # Disabled until 2+ profiles
         actions.addWidget(self.ok_btn)
 
-        self.cancel_btn = QPushButton("X")
+        self.cancel_btn = QPushButton(tr("X"))
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
         actions.addWidget(self.cancel_btn)
@@ -1350,13 +1350,13 @@ class TransformPanel(RoundedPanelFrame):
         actions.addStretch()
 
         # OK Button
-        self.btn_ok = QPushButton("OK")
+        self.btn_ok = QPushButton(tr("OK"))
         self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._on_confirm)
         actions.addWidget(self.btn_ok)
 
         # Cancel Button
-        self.btn_cancel = QPushButton("X")
+        self.btn_cancel = QPushButton(tr("X"))
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self._on_cancel)
         actions.addWidget(self.btn_cancel)
@@ -1696,7 +1696,7 @@ class RevolveInputPanel(RoundedPanelFrame):
         self.angle_input.escapePressed.connect(self.cancelled.emit)
         angle_row.addWidget(self.angle_input)
 
-        self.flip_btn = QPushButton("<->")
+        self.flip_btn = QPushButton(tr("<->"))
         self.flip_btn.setToolTip(tr("Flip direction (F)"))
         self.flip_btn.setObjectName("ghost")
         self.flip_btn.clicked.connect(self._flip_direction)
@@ -1710,12 +1710,12 @@ class RevolveInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.btn_ok = QPushButton("OK")
+        self.btn_ok = QPushButton(tr("OK"))
         self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
         actions.addWidget(self.btn_ok)
 
-        self.btn_cancel = QPushButton("X")
+        self.btn_cancel = QPushButton(tr("X"))
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         actions.addWidget(self.btn_cancel)
@@ -1855,12 +1855,12 @@ class OffsetPlaneInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.ok_btn = QPushButton("OK")
+        self.ok_btn = QPushButton(tr("OK"))
         self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
         actions.addWidget(self.ok_btn)
 
-        self.cancel_btn = QPushButton("X")
+        self.cancel_btn = QPushButton(tr("X"))
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
         actions.addWidget(self.cancel_btn)
@@ -1980,12 +1980,12 @@ class HoleInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.btn_ok = QPushButton("OK")
+        self.btn_ok = QPushButton(tr("OK"))
         self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
         actions.addWidget(self.btn_ok)
 
-        self.btn_cancel = QPushButton("X")
+        self.btn_cancel = QPushButton(tr("X"))
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         actions.addWidget(self.btn_cancel)
@@ -2119,12 +2119,12 @@ class DraftInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.btn_ok = QPushButton("OK")
+        self.btn_ok = QPushButton(tr("OK"))
         self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
         actions.addWidget(self.btn_ok)
 
-        self.btn_cancel = QPushButton("X")
+        self.btn_cancel = QPushButton(tr("X"))
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self._cancel)
         actions.addWidget(self.btn_cancel)
@@ -2270,12 +2270,12 @@ class SplitInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.btn_ok = QPushButton("OK")
+        self.btn_ok = QPushButton(tr("OK"))
         self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
         actions.addWidget(self.btn_ok)
 
-        self.btn_cancel = QPushButton("X")
+        self.btn_cancel = QPushButton(tr("X"))
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         actions.addWidget(self.btn_cancel)
@@ -2469,12 +2469,12 @@ class PatternInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.ok_btn = QPushButton("OK")
+        self.ok_btn = QPushButton(tr("OK"))
         self.ok_btn.setObjectName("primary")
         self.ok_btn.clicked.connect(self._confirm)
         actions.addWidget(self.ok_btn)
 
-        self.cancel_btn = QPushButton("X")
+        self.cancel_btn = QPushButton(tr("X"))
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
         actions.addWidget(self.cancel_btn)
@@ -2668,7 +2668,7 @@ class NSidedPatchInputPanel(RoundedPanelFrame):
         self.ok_btn.clicked.connect(self._confirm)
         actions.addWidget(self.ok_btn)
 
-        self.cancel_btn = QPushButton("X")
+        self.cancel_btn = QPushButton(tr("X"))
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
         actions.addWidget(self.cancel_btn)
@@ -2807,7 +2807,7 @@ class LatticeInputPanel(RoundedPanelFrame):
         self.ok_btn.clicked.connect(self._confirm)
         actions.addWidget(self.ok_btn)
 
-        self.cancel_btn = QPushButton("X")
+        self.cancel_btn = QPushButton(tr("X"))
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.clicked.connect(self._cancel)
         actions.addWidget(self.cancel_btn)
@@ -2978,12 +2978,12 @@ class ThreadInputPanel(RoundedPanelFrame):
         actions.setSpacing(8)
         actions.addStretch()
 
-        self.btn_ok = QPushButton("OK")
+        self.btn_ok = QPushButton(tr("OK"))
         self.btn_ok.setObjectName("primary")
         self.btn_ok.clicked.connect(self._confirm)
         actions.addWidget(self.btn_ok)
 
-        self.btn_cancel = QPushButton("X")
+        self.btn_cancel = QPushButton(tr("X"))
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancelled.emit)
         actions.addWidget(self.btn_cancel)
@@ -3174,7 +3174,7 @@ class MeasureInputPanel(RoundedPanelFrame):
         actions.addWidget(self.clear_btn)
         actions.addStretch()
 
-        self.btn_close = QPushButton("X")
+        self.btn_close = QPushButton(tr("X"))
         self.btn_close.setObjectName("danger")
         self.btn_close.clicked.connect(self.close_requested.emit)
         actions.addWidget(self.btn_close)
@@ -3274,7 +3274,7 @@ class PointToPointMovePanel(RoundedPanelFrame):
         actions.addWidget(self.reset_btn)
         actions.addStretch()
 
-        self.btn_cancel = QPushButton("X")
+        self.btn_cancel = QPushButton(tr("X"))
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.clicked.connect(self.cancel_requested.emit)
         actions.addWidget(self.btn_cancel)

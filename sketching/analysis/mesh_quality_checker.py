@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MeshQualityReport:
-    """QualitÃ¤tsbericht fÃ¼r ein Mesh."""
+    """Qualitätsbericht für ein Mesh."""
     
     # Pfad
     mesh_path: str = ""
@@ -33,7 +33,7 @@ class MeshQualityReport:
         default_factory=lambda: ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
     )
     
-    # QualitÃ¤ts-Probleme
+    # Qualitäts-Probleme
     has_degenerate_faces: bool = False
     has_duplicate_vertices: bool = False
     has_nan_vertices: bool = False
@@ -54,7 +54,7 @@ class MeshQualityReport:
     
     @property
     def is_valid(self) -> bool:
-        """Gibt zurÃ¼ck ob das Mesh grundsÃ¤tzlich valide ist."""
+        """Gibt zurück ob das Mesh grundsätzlich valide ist."""
         return (
             self.face_count > 0 and
             self.vertex_count > 0 and
@@ -64,7 +64,7 @@ class MeshQualityReport:
     
     @property
     def bounding_box_size(self) -> Tuple[float, float, float]:
-        """Berechnet die Bounding-Box-GrÃ¶ÃŸe."""
+        """Berechnet die Bounding-Box-Größe."""
         min_pt, max_pt = self.bounds
         return (
             max_pt[0] - min_pt[0],
@@ -74,13 +74,13 @@ class MeshQualityReport:
     
     @property
     def max_bounding_dimension(self) -> float:
-        """GrÃ¶ÃŸte Dimension der Bounding Box."""
+        """Größte Dimension der Bounding Box."""
         return max(self.bounding_box_size)
 
 
 class MeshQualityChecker:
     """
-    PrÃ¼ft und repariert Mesh-QualitÃ¤t.
+    Prüft und repariert Mesh-Qualität.
     
     Verwendet NUR PyVista-Standardfunktionen (keine Modifikationen an Libs).
     """
@@ -117,12 +117,12 @@ class MeshQualityChecker:
               auto_repair: bool = True,
               auto_decimate: bool = True) -> MeshQualityReport:
         """
-        VollstÃ¤ndige QualitÃ¤tsprÃ¼fung einer STL-Datei.
+        Vollständige Qualitätsprüfung einer STL-Datei.
         
         Args:
             mesh_path: Pfad zur STL-Datei
-            auto_repair: Automatisch reparieren wenn nÃ¶tig
-            auto_decimate: Automatisch decimieren wenn zu groÃŸ
+            auto_repair: Automatisch reparieren wenn nötig
+            auto_decimate: Automatisch decimieren wenn zu groß
             
         Returns:
             MeshQualityReport mit Ergebnissen
@@ -131,7 +131,7 @@ class MeshQualityChecker:
         
         if not self.pyvista_available:
             report.recommended_action = "reject"
-            report.warnings.append("PyVista nicht verfÃ¼gbar")
+            report.warnings.append("PyVista nicht verfügbar")
             return report
         
         try:
@@ -149,12 +149,12 @@ class MeshQualityChecker:
             # 2. Basis-Analyse
             report = self._analyze_basic(mesh, report)
             
-            # 3. QualitÃ¤ts-Checks
+            # 3. Qualitäts-Checks
             report = self._check_quality_issues(mesh, report)
             
-            # 4. Auto-Repair wenn gewÃ¼nscht
+            # 4. Auto-Repair wenn gewünscht
             # Legacy-Compat: Bei auto_repair=True wird der Repair-Pfad immer
-            # durchlaufen (auÃŸer bei reject), damit die Pipeline deterministisch
+            # durchlaufen (außer bei reject), damit die Pipeline deterministisch
             # bleibt und Repair-Hooks konsistent greifen.
             if auto_repair:
                 mesh = self.auto_repair(mesh)
@@ -163,7 +163,7 @@ class MeshQualityChecker:
                 report = self._analyze_basic(mesh, report)
                 report = self._check_quality_issues(mesh, report)
             
-            # 5. Auto-Decimate wenn zu groÃŸ
+            # 5. Auto-Decimate wenn zu groß
             if auto_decimate and report.face_count > self.MAX_FACES_FOR_QUICK_ANALYSIS:
                 mesh = self.decimate_if_needed(mesh)
                 report.decimation_performed = True
@@ -215,7 +215,7 @@ class MeshQualityChecker:
     
     def _check_watertight(self, mesh) -> bool:
         """
-        PrÃ¼ft ob das Mesh watertight (geschlossen) ist.
+        Prüft ob das Mesh watertight (geschlossen) ist.
         
         Verwendet PyVista's is_all_edges manifold check.
         """
@@ -223,7 +223,7 @@ class MeshQualityChecker:
             # PyVista's eingebaute Methode
             return mesh.is_all_edges
         except Exception:
-            # Fallback: PrÃ¼fe ob offene edges existieren
+            # Fallback: Prüfe ob offene edges existieren
             try:
                 edges = mesh.extract_feature_edges(
                     boundary_edges=True,
@@ -236,7 +236,7 @@ class MeshQualityChecker:
     
     def _check_quality_issues(self, mesh, report: MeshQualityReport) -> MeshQualityReport:
         """
-        PrÃ¼ft auf QualitÃ¤tsprobleme.
+        Prüft auf Qualitätsprobleme.
         
         Args:
             mesh: PyVista PolyData Mesh
@@ -245,10 +245,10 @@ class MeshQualityChecker:
         Returns:
             Aktualisierter Report
         """
-        # 1. Degenerate faces (FlÃ¤che nahe 0)
+        # 1. Degenerate faces (Fläche nahe 0)
         report.has_degenerate_faces = self._check_degenerate_faces(mesh)
         if report.has_degenerate_faces:
-            report.warnings.append("Degenerierte Faces gefunden (FlÃ¤che â‰ˆ 0)")
+            report.warnings.append("Degenerierte Faces gefunden (Fläche â‰ˆ 0)")
         
         # 2. NaN in Vertices
         report.has_nan_vertices = self._check_nan_vertices(mesh)
@@ -269,29 +269,29 @@ class MeshQualityChecker:
         if report.face_count > self.MAX_FACES_FOR_DETAILED_ANALYSIS:
             report.warnings.append(
                 f"Sehr viele Faces ({report.face_count}), "
-                f"Analyse kÃ¶nnte langsam sein"
+                f"Analyse könnte langsam sein"
             )
         
         # 5. Nicht watertight
         if not report.is_watertight:
-            report.warnings.append("Mesh ist nicht watertight (hat LÃ¶cher)")
+            report.warnings.append("Mesh ist nicht watertight (hat Löcher)")
         
-        logger.debug(f"QualitÃ¤ts-Checks: degenerate={report.has_degenerate_faces}, "
+        logger.debug(f"Qualitäts-Checks: degenerate={report.has_degenerate_faces}, "
                     f"nan={report.has_nan_vertices}")
         
         return report
     
     def _check_degenerate_faces(self, mesh) -> bool:
-        """PrÃ¼ft auf degenerierte Faces (FlÃ¤che nahe 0)."""
+        """Prüft auf degenerierte Faces (Fläche nahe 0)."""
         try:
-            # Berechne Face-FlÃ¤chen
+            # Berechne Face-Flächen
             areas = mesh.compute_cell_sizes()["Area"]
             return np.any(areas < self.MIN_FACE_AREA)
         except Exception:
             return False
     
     def _check_nan_vertices(self, mesh) -> bool:
-        """PrÃ¼ft auf NaN-Werte in Vertices."""
+        """Prüft auf NaN-Werte in Vertices."""
         try:
             points = mesh.points
             return np.any(np.isnan(points))
@@ -299,7 +299,7 @@ class MeshQualityChecker:
             return False
 
     def _check_duplicate_vertices(self, mesh) -> bool:
-        """PrÃ¼ft ob identische Vertices mehrfach vorkommen."""
+        """Prüft ob identische Vertices mehrfach vorkommen."""
         try:
             points = np.asarray(mesh.points)
             if points.size == 0:
@@ -332,7 +332,7 @@ class MeshQualityChecker:
             report.recommended_action = "reject"
             return report
         
-        # Reparatur nÃ¶tig
+        # Reparatur nötig
         needs_repair = (
             not report.is_watertight or
             report.has_degenerate_faces or
@@ -343,7 +343,7 @@ class MeshQualityChecker:
             report.recommended_action = "repair"
             return report
         
-        # Decimation nÃ¶tig
+        # Decimation nötig
         if report.face_count > self.MAX_FACES_FOR_QUICK_ANALYSIS:
             report.recommended_action = "decimate"
             return report
@@ -354,12 +354,12 @@ class MeshQualityChecker:
     
     def auto_repair(self, mesh) -> Any:
         """
-        FÃ¼hrt Standard-Reparaturen durch.
+        Führt Standard-Reparaturen durch.
         
-        Ohne Lib-Ã„nderungen:
+        Ohne Lib-Änderungen:
         1. clean() - Entfernt degenerierte/unreferenced Faces
         2. triangulate() - Sicherstellen dass alles Dreiecke sind
-        3. fill_holes() - FÃ¼llt kleine LÃ¶cher (wenn verfÃ¼gbar)
+        3. fill_holes() - Füllt kleine Löcher (wenn verfügbar)
         
         Args:
             mesh: PyVista PolyData Mesh
@@ -404,12 +404,12 @@ class MeshQualityChecker:
                 
                 if boundary.n_cells > 0:
                     repair_log.append(
-                        f"Mesh hat {boundary.n_cells} offene Kanten (LÃ¶cher)"
+                        f"Mesh hat {boundary.n_cells} offene Kanten (Löcher)"
                     )
                     logger.warning(f"Mesh hat {boundary.n_cells} offene Kanten - "
                                  f"manuelle Reparatur empfohlen")
             except Exception as e:
-                logger.debug(f"Hole detection nicht verfÃ¼gbar: {e}")
+                logger.debug(f"Hole detection nicht verfügbar: {e}")
             
             logger.info(f"Auto-Repair abgeschlossen: {len(repair_log)} Aktionen")
             
@@ -423,16 +423,16 @@ class MeshQualityChecker:
     
     def decimate_if_needed(self, mesh, max_faces: Optional[int] = None) -> Any:
         """
-        Reduziert Face-Count wenn nÃ¶tig.
+        Reduziert Face-Count wenn nötig.
         
-        Ziel: Analyse-Performance bei groÃŸen Meshes.
+        Ziel: Analyse-Performance bei großen Meshes.
         
         Args:
             mesh: PyVista PolyData Mesh
             max_faces: Ziel-Max-Faces (default: TARGET_FACE_COUNT_AFTER_DECIMATION)
             
         Returns:
-            MÃ¶glicherweise reduziertes Mesh
+            Möglicherweise reduziertes Mesh
         """
         if max_faces is None:
             max_faces = self.TARGET_FACE_COUNT_AFTER_DECIMATION
@@ -467,7 +467,7 @@ class MeshQualityChecker:
     
     def get_mesh_info(self, mesh_path: str) -> dict:
         """
-        Gibt Basis-Informationen Ã¼ber ein Mesh zurÃ¼ck (schnell, ohne Repair).
+        Gibt Basis-Informationen über ein Mesh zurück (schnell, ohne Repair).
         
         Args:
             mesh_path: Pfad zur STL-Datei
@@ -508,7 +508,7 @@ def check_mesh_quality(mesh_path: str,
                        auto_repair: bool = True,
                        auto_decimate: bool = True) -> MeshQualityReport:
     """
-    Schnell-Check fÃ¼r Mesh-QualitÃ¤t.
+    Schnell-Check für Mesh-Qualität.
     
     Args:
         mesh_path: Pfad zur STL-Datei

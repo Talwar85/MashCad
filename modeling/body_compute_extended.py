@@ -445,7 +445,7 @@ class BodyComputeExtendedMixin:
 
             path_edges = path_wire.edges() if hasattr(path_wire, 'edges') else []
             if not path_edges:
-                logger.warning("Sweep: Pfad hat keine Edges, Ã¼berspringe Profil-Verschiebung")
+                logger.warning("Sweep: Pfad hat keine Edges, überspringe Profil-Verschiebung")
                 return profile_face
 
             first_edge = path_edges[0]
@@ -488,7 +488,7 @@ class BodyComputeExtendedMixin:
 
     def _is_curved_path(self, path_wire) -> bool:
         """
-        Analysiert ob der Pfad gekrÃ¼mmt ist (nicht gerade).
+        Analysiert ob der Pfad gekrümmt ist (nicht gerade).
         """
         try:
             edges = list(path_wire.edges()) if hasattr(path_wire, 'edges') else []

@@ -54,7 +54,7 @@ class MenuActionsMixin:
         self.browser.set_document(self.document)
         self._set_mode("3d")
         self._current_project_path = None
-        self.setWindowTitle("MashCAD")
+        self.setWindowTitle(tr("MashCAD"))
         logger.info("Neues Projekt erstellt")
     
     def _save_project(self):
@@ -329,7 +329,7 @@ class MenuActionsMixin:
             0, 100,
             self
         )
-        progress.setWindowTitle("STL Export")
+        progress.setWindowTitle(tr("STL Export"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -382,7 +382,7 @@ class MenuActionsMixin:
             0, 100,
             self
         )
-        progress.setWindowTitle("STEP Export")
+        progress.setWindowTitle(tr("STEP Export"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -463,7 +463,7 @@ class MenuActionsMixin:
                 0, 100,
                 self
             )
-            progress.setWindowTitle("STEP Import")
+            progress.setWindowTitle(tr("STEP Import"))
             progress.setWindowModality(Qt.WindowModal)
             progress.setMinimumDuration(0)
             progress.setValue(10)
@@ -508,7 +508,7 @@ class MenuActionsMixin:
                 0, 100,
                 self
             )
-            progress.setWindowTitle("CadQuery Import")
+            progress.setWindowTitle(tr("CadQuery Import"))
             progress.setWindowModality(Qt.WindowModal)
             progress.setMinimumDuration(0)
             progress.setValue(10)
