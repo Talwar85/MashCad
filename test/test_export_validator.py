@@ -1,5 +1,5 @@
-"""
-Tests für Export Validator
+﻿"""
+Tests fÃ¼r Export Validator
 ==========================
 
 Phase 1: Export Foundation (PR-002)
@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 
 
 class TestValidationIssue:
-    """Tests für ValidationIssue."""
+    """Tests fÃ¼r ValidationIssue."""
     
     def test_issue_creation(self):
         """Test Erstellung eines Issues."""
@@ -69,7 +69,7 @@ class TestValidationIssue:
 
 
 class TestValidationResult:
-    """Tests für ValidationResult."""
+    """Tests fÃ¼r ValidationResult."""
     
     def test_default_result_is_valid(self):
         """Test dass Default-Result valid ist."""
@@ -157,7 +157,7 @@ class TestValidationResult:
 
 
 class TestValidationOptions:
-    """Tests für ValidationOptions."""
+    """Tests fÃ¼r ValidationOptions."""
     
     def test_default_options(self):
         """Test Default-Optionen."""
@@ -175,7 +175,7 @@ class TestValidationOptions:
 
 
 class TestExportValidatorBasic:
-    """Basis-Tests für ExportValidator."""
+    """Basis-Tests fÃ¼r ExportValidator."""
     
     def test_validate_with_none_shape(self):
         """Test Validierung mit None Shape."""
@@ -200,11 +200,11 @@ class TestExportValidatorBasic:
                 with patch.object(ExportValidator, '_check_degenerate_faces'):
                     result = ExportValidator.is_printable(mock_solid)
                     # Da wir Checks mocken, sollte es True sein
-                    # (wenn keine Checks Issues hinzufügen)
+                    # (wenn keine Checks Issues hinzufÃ¼gen)
 
 
 class TestExportValidatorConvenience:
-    """Tests für Convenience-Funktionen."""
+    """Tests fÃ¼r Convenience-Funktionen."""
     
     @patch('modeling.export_validator.ExportValidator.validate_for_export')
     def test_validate_for_print(self, mock_validate):
@@ -228,7 +228,7 @@ class TestExportValidatorConvenience:
         result = validate_strict(mock_solid)
         
         assert result == mock_result
-        # Prüfe dass validate_for_export aufgerufen wurde
+        # PrÃ¼fe dass validate_for_export aufgerufen wurde
         mock_validate.assert_called_once()
         # validate_strict passes options as positional argument (index 1)
         call_args = mock_validate.call_args.args
@@ -237,10 +237,10 @@ class TestExportValidatorConvenience:
 
 
 class TestExportValidatorQuickReport:
-    """Tests für Quick Report Funktion."""
+    """Tests fÃ¼r Quick Report Funktion."""
     
     def test_quick_report_printable(self):
-        """Test Quick Report für druckbares Solid."""
+        """Test Quick Report fÃ¼r druckbares Solid."""
         mock_solid = Mock()
         
         with patch.object(ExportValidator, 'validate_for_export') as mock_val:
@@ -250,7 +250,7 @@ class TestExportValidatorQuickReport:
         assert "OK" in report or "Druckbar" in report
         
     def test_quick_report_not_printable(self):
-        """Test Quick Report für nicht-druckbares Solid."""
+        """Test Quick Report fÃ¼r nicht-druckbares Solid."""
         mock_solid = Mock()
         
         result = ValidationResult()
@@ -267,7 +267,7 @@ class TestExportValidatorQuickReport:
 
 
 class TestExportValidatorStatistics:
-    """Tests für Statistik-Sammlung."""
+    """Tests fÃ¼r Statistik-Sammlung."""
     
     def test_statistics_collected(self):
         """Test dass Statistiken gesammelt werden."""
@@ -282,10 +282,10 @@ class TestExportValidatorStatistics:
 
 
 class TestNormalsConsistencyCheck:
-    """Tests für Normalen-Konsistenz-Prüfung (PR-002)."""
+    """Tests fÃ¼r Normalen-Konsistenz-PrÃ¼fung (PR-002)."""
     
     def test_check_normals_consistency_returns_dict(self):
-        """Test dass check_normals_consistency ein Dict zurückgibt."""
+        """Test dass check_normals_consistency ein Dict zurÃ¼ckgibt."""
         mock_solid = Mock()
         mock_solid.wrapped = None
         
@@ -347,10 +347,10 @@ class TestNormalsConsistencyCheck:
 
 
 class TestAutoRepair:
-    """Tests für Auto-Repair Funktionalität (PR-002)."""
+    """Tests fÃ¼r Auto-Repair FunktionalitÃ¤t (PR-002)."""
     
     def test_attempt_auto_repair_returns_tuple(self):
-        """Test dass attempt_auto_repair ein Tuple zurückgibt."""
+        """Test dass attempt_auto_repair ein Tuple zurÃ¼ckgibt."""
         mock_solid = Mock()
         mock_solid.wrapped = None
         
@@ -381,7 +381,7 @@ class TestAutoRepair:
             repaired, repair_result = ExportValidator.attempt_auto_repair(mock_solid)
             
             assert repair_result.success is True
-            assert "Keine Reparatur nötig" in repair_result.message
+            assert "Keine Reparatur" in repair_result.message
     
     def test_attempt_auto_repair_with_validation_result(self):
         """Test Auto-Repair mit vorhandenem ValidationResult."""
@@ -424,13 +424,13 @@ class TestAutoRepair:
 
 
 class TestFreeBoundsDetection:
-    """Tests für Free-Bounds Erkennung."""
+    """Tests fÃ¼r Free-Bounds Erkennung."""
     
     def test_free_bounds_check_updates_statistics(self):
         """Test dass Free-Bounds Check Statistiken sammelt."""
         result = ValidationResult()
         
-        # Manuell Statistiken setzen wie es _check_free_bounds tun würde
+        # Manuell Statistiken setzen wie es _check_free_bounds tun wÃ¼rde
         result.statistics['total_edges'] = 50
         result.statistics['free_bounds'] = 3
         result.statistics['internal_edges'] = 47
@@ -445,7 +445,7 @@ class TestFreeBoundsDetection:
             severity=ValidationSeverity.WARNING,
             check_type=ValidationCheckType.FREE_BOUNDS,
             message="3 offene Kanten gefunden",
-            suggestion="Verwenden Sie Shell um Kanten zu schließen"
+            suggestion="Verwenden Sie Shell um Kanten zu schlieÃŸen"
         )
         result.add_issue(issue)
         
@@ -453,64 +453,41 @@ class TestFreeBoundsDetection:
         assert result.is_closed is False
     
     def test_free_bounds_ratio_calculation(self):
-        """Test Berechnung des Free-Bounds Verhältnisses."""
+        """Test Berechnung des Free-Bounds VerhÃ¤ltnisses."""
         total_edges = 100
         free_bounds = 5
         ratio = free_bounds / total_edges
         
-        # 5% sollte unter der 1% Schwelle sein für WARNING
+        # 5% sollte unter der 1% Schwelle sein fÃ¼r WARNING
         assert ratio == 0.05
         
-        # Bei 1% Schwelle wäre das ein WARNING
+        # Bei 1% Schwelle wÃ¤re das ein WARNING
         max_ratio = 0.01
         assert ratio > max_ratio  # Would trigger stricter handling
 
 
 class TestFeatureFlagsIntegration:
-    """Tests für Feature-Flag Integration."""
-    
-    def test_export_normals_check_flag_exists(self):
-        """Test dass export_normals_check Flag existiert."""
-        from config.feature_flags import FEATURE_FLAGS
-        
-        assert 'export_normals_check' in FEATURE_FLAGS
-        # Default sollte False sein (performance-intensiv)
-        assert FEATURE_FLAGS['export_normals_check'] is False
-    
-    def test_export_auto_repair_flag_exists(self):
-        """Test dass export_auto_repair Flag existiert."""
-        from config.feature_flags import FEATURE_FLAGS
-        
-        assert 'export_auto_repair' in FEATURE_FLAGS
-        # Default sollte True sein
-        assert FEATURE_FLAGS['export_auto_repair'] is True
+    """Tests fÃ¼r verbleibende Export-Flags."""
     
     def test_export_free_bounds_check_flag_exists(self):
         """Test dass export_free_bounds_check Flag existiert."""
         from config.feature_flags import FEATURE_FLAGS
         
         assert 'export_free_bounds_check' in FEATURE_FLAGS
-        # Default sollte True sein
         assert FEATURE_FLAGS['export_free_bounds_check'] is True
     
-    def test_feature_flag_is_enabled_function(self):
-        """Test is_enabled Funktion für neue Flags."""
-        from config.feature_flags import is_enabled, set_flag
+    def test_removed_export_flags_stay_removed(self):
+        """Test dass tote Export-Flags entfernt wurden."""
+        from config.feature_flags import FEATURE_FLAGS, is_enabled
         
-        # Test default values
-        assert is_enabled('export_auto_repair') is True
+        assert 'export_auto_repair' not in FEATURE_FLAGS
+        assert 'export_normals_check' not in FEATURE_FLAGS
+        assert is_enabled('export_auto_repair') is False
         assert is_enabled('export_normals_check') is False
-        
-        # Test setting flag
-        set_flag('export_normals_check', True)
-        assert is_enabled('export_normals_check') is True
-        
-        # Reset
-        set_flag('export_normals_check', False)
 
 
 class TestValidationResultExtended:
-    """Erweiterte Tests für ValidationResult."""
+    """Erweiterte Tests fÃ¼r ValidationResult."""
     
     def test_has_inverted_normals_flag(self):
         """Test has_inverted_normals Flag."""
@@ -556,3 +533,4 @@ class TestValidationResultExtended:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+

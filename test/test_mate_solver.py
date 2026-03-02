@@ -28,7 +28,6 @@ from modeling.mate_system import (
     Mate,
 )
 from modeling.component_core import Component, ComponentTransform
-from config.feature_flags import is_enabled, set_flag
 
 
 # Test fixtures
@@ -170,11 +169,6 @@ class TestMateSolverBasic:
         assert len(result.component_transforms) == 2
         assert result.iterations == 0
     
-    def test_feature_flag_enabled(self):
-        """Test that mate_solver feature flag is enabled."""
-        assert is_enabled("mate_solver") is True
-
-
 class TestCoincidentMate:
     """Tests for COINCIDENT mate solving."""
     

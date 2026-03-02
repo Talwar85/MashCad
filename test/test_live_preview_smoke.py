@@ -92,17 +92,12 @@ def test_fillet_panel_has_signal():
 
 
 def test_preview_debounce_settings():
-    """Testet dass die Debounce Settings existieren."""
+    """Testet dass die verbleibende Preview-Konfiguration existiert."""
     from config.feature_flags import FEATURE_FLAGS
 
     assert 'preview_debounce_ms' in FEATURE_FLAGS
-    assert 'preview_subdivisions_live' in FEATURE_FLAGS
-    assert 'preview_subdivisions_final' in FEATURE_FLAGS
 
-    # Prüfe vernünftige Werte
     assert FEATURE_FLAGS['preview_debounce_ms'] > 0
-    assert FEATURE_FLAGS['preview_subdivisions_live'] > 0
-    assert FEATURE_FLAGS['preview_subdivisions_final'] > 0
 
 
 def test_is_enabled_function():
@@ -117,8 +112,6 @@ def test_is_enabled_function():
     assert is_enabled('live_preview_shell') is True
     assert is_enabled('live_preview_fillet') is True
     assert is_enabled('live_preview_chamfer') is True
-    assert is_enabled('live_preview_textures') is True
-    assert is_enabled('live_preview_patterns') is True
 
 
 if __name__ == '__main__':

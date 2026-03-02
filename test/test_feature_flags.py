@@ -1,130 +1,44 @@
-"""
-Feature Flags Tests - Tests für das Feature Flag System
-
-Author: Claude (OCP-First Migration Phase 1)
-Date: 2026-02-10
-"""
+﻿"""Tests for the feature flag registry."""
 
 import pytest
-from config.feature_flags import (
-    is_enabled,
-    set_flag,
-    get_all_flags,
-    FEATURE_FLAGS
-)
+
+from config.feature_flags import FEATURE_FLAGS, get_all_flags, is_enabled, set_flag
 
 
 class TestFeatureFlagsBasic:
-    """Tests für grundlegende Feature Flag Funktionalität."""
-    
     def test_is_enabled_existing_flag_true(self):
-        """Test: Existierendes Flag mit Wert True."""
-        # geometry_drift_detection ist auf True gesetzt
         assert is_enabled("geometry_drift_detection") is True
-    
+
     def test_is_enabled_existing_flag_false(self):
-        """Test: Existierendes Flag mit Wert False."""
-        # cylindrical_face_edit ist auf False gesetzt
-        assert is_enabled("cylindrical_face_edit") is False
-    
+        assert is_enabled("normal_map_preview") is False
+
     def test_is_enabled_nonexistent_flag(self):
-        """Test: Nicht existierendes Flag gibt False zurück."""
         assert is_enabled("nonexistent_flag_xyz123") is False
-    
-    def test_get_all_flags_returns_dict(self):
-        """Test: get_all_flags gibt ein Dict zurück."""
-        flags = get_all_flags()
-        assert isinstance(flags, dict)
-        assert len(flags) > 0
-    
-    def test_get_all_flags_returns_copy(self):
-        """Test: get_all_flags gibt eine Kopie zurück."""
+
+    def test_get_all_flags_returns_dict_copy(self):
         flags1 = get_all_flags()
         flags2 = get_all_flags()
-        
-        # Modifiziere eine Kopie
+
+        assert isinstance(flags1, dict)
+        assert len(flags1) > 0
+        assert flags1 is not FEATURE_FLAGS
+        assert flags2 is not FEATURE_FLAGS
+
         flags1["new_flag"] = True
-        
-        # Original sollte nicht verändert sein
         assert "new_flag" not in FEATURE_FLAGS
-    
+
     def test_set_flag_runtime(self):
-        """Test: Set Flag zur Laufzeit."""
-        # Neues Flag setzen
         set_flag("runtime_test_flag", True)
         assert is_enabled("runtime_test_flag") is True
-        
-        # Flag ändern
+
         set_flag("runtime_test_flag", False)
         assert is_enabled("runtime_test_flag") is False
-        
-        # Cleanup
+
         del FEATURE_FLAGS["runtime_test_flag"]
 
 
-class TestOCPFirstFeatureFlags:
-    """Tests für OCP-First Migration Feature Flags.
-
-    Nach Phase A-F (Feb 2026) sind alle OCP-First Flags entfernt,
-    da die Operationen jetzt direkt OCP verwenden (kein Fallback mehr nötig).
-    Die Features sind nun permanent integriert.
-    """
-
-    def test_ocp_first_extrude_removed(self):
-        """Test: ocp_first_extrude wurde nach OCP-First Migration entfernt."""
-        # Flag wurde entfernt - Extrude verwendet jetzt direkt OCP
-        assert is_enabled("ocp_first_extrude") is False
-
-    def test_ocp_first_revolve_removed(self):
-        """Test: ocp_first_revolve wurde nach OCP-First Migration entfernt."""
-        # Flag wurde entfernt - Revolve verwendet jetzt direkt OCP
-        assert is_enabled("ocp_first_revolve") is False
-
-    def test_ocp_first_loft_removed(self):
-        """Test: ocp_first_loft wurde nach OCP-First Migration entfernt."""
-        # Flag wurde entfernt - Loft verwendet jetzt direkt OCP
-        assert is_enabled("ocp_first_loft") is False
-
-    def test_ocp_first_sweep_removed(self):
-        """Test: ocp_first_sweep wurde nach OCP-First Migration entfernt."""
-        # Flag wurde entfernt - Sweep verwendet jetzt direkt OCP
-        assert is_enabled("ocp_first_sweep") is False
-
-    def test_ocp_first_shell_removed(self):
-        """Test: ocp_first_shell wurde nach OCP-First Migration entfernt."""
-        # Flag wurde entfernt - Shell verwendet jetzt direkt OCP
-        assert is_enabled("ocp_first_shell") is False
-
-    def test_ocp_first_hollow_removed(self):
-        """Test: ocp_first_hollow wurde nach OCP-First Migration entfernt."""
-        # Flag wurde entfernt - Hollow verwendet jetzt direkt OCP
-        assert is_enabled("ocp_first_hollow") is False
-
-    def test_ocp_first_fillet_removed(self):
-        """Test: ocp_first_fillet wurde nach OCP-First Migration entfernt."""
-        # Flag wurde entfernt - Fillet verwendet jetzt direkt OCP
-        assert is_enabled("ocp_first_fillet") is False
-
-    def test_ocp_first_chamfer_removed(self):
-        """Test: ocp_first_chamfer wurde nach OCP-First Migration entfernt."""
-        # Flag wurde entfernt - Chamfer verwendet jetzt direkt OCP
-        assert is_enabled("ocp_first_chamfer") is False
-
-    def test_ocp_brep_cache_removed(self):
-        """Test: ocp_brep_cache wurde nach Migration entfernt (Feature integriert)."""
-        assert is_enabled("ocp_brep_cache") is False
-
-    def test_ocp_incremental_rebuild_removed(self):
-        """Test: ocp_incremental_rebuild wurde nach Migration entfernt (Feature integriert)."""
-        assert is_enabled("ocp_incremental_rebuild") is False
-
-    def test_ocp_brep_persistence_removed(self):
-        """Test: ocp_brep_persistence wurde nach Migration entfernt (Feature integriert)."""
-        assert is_enabled("ocp_brep_persistence") is False
-
-    def test_all_ocp_first_flags_removed(self):
-        """Test: Alle OCP-First Flags wurden entfernt (Features sind nun integriert)."""
-        # Nach Phase A-F (Feb 2026): Alle OCP-First Flags entfernt
+class TestRemovedIntegratedFlags:
+    def test_ocp_first_flags_are_removed(self):
         removed_flags = [
             "ocp_first_extrude",
             "ocp_brep_cache",
@@ -136,174 +50,101 @@ class TestOCPFirstFeatureFlags:
             "ocp_first_loft",
             "ocp_first_sweep",
             "ocp_first_shell",
-            "ocp_first_hollow"
+            "ocp_first_hollow",
         ]
 
         flags = get_all_flags()
-
-        # Alle OCP-First Flags sollten NICHT mehr existieren
         for flag in removed_flags:
-            assert flag not in flags, f"OCP-First Flag {flag} wurde entfernt, sollte nicht mehr existieren"
+            assert flag not in flags
+            assert is_enabled(flag) is False
 
-
-class TestPerformanceFeatureFlags:
-    """Tests für Performance Optimierung Feature Flags.
-    
-    Hinweis: Viele Performance-Flags wurden nach Integration der Features entfernt.
-    Nur noch aktive Flags werden getestet.
-    """
-    
-    def test_performance_flags_default_true(self):
-        """Test: Verbleibende Performance Flags sind standardmäßig True."""
-        # Diese Flags existieren noch und sind aktiv
-        performance_flags = [
+    def test_dead_flags_are_removed(self):
+        removed_flags = [
+            "mate_system_v1",
+            "mate_solver",
+            "export_normals_check",
+            "export_auto_repair",
             "ocp_advanced_flags",
             "wall_thickness_analysis",
+            "loft_sweep_hardening",
+            "solver_experimental_staged",
+            "live_preview_textures",
+            "live_preview_patterns",
+            "preview_subdivisions_live",
+            "preview_subdivisions_final",
+            "cylindrical_face_edit",
+            "rc_burn_in_mode",
+            "assembly_system",
+            "native_ocp_helix",
+        ]
+
+        flags = get_all_flags()
+        for flag in removed_flags:
+            assert flag not in flags
+            assert is_enabled(flag) is False
+
+
+class TestActiveRuntimePolicies:
+    def test_core_runtime_flags_default_true(self):
+        flags = [
             "geometry_drift_detection",
             "export_3mf",
-            "export_auto_repair"
-        ]
-        
-        for flag in performance_flags:
-            assert is_enabled(flag) is True, f"Performance Flag {flag} sollte True sein"
-    
-    def test_self_heal_strict_default_true(self):
-        """Test: self_heal_strict ist standardmäßig True."""
-        assert is_enabled("self_heal_strict") is True
-
-    def test_strict_topology_fallback_policy_default_true(self):
-        """Test: strict_topology_fallback_policy ist standardmäßig True."""
-        assert is_enabled("strict_topology_fallback_policy") is True
-
-
-class TestBooleanRobustnessFeatureFlags:
-    """Tests für Boolean Robustness Feature Flags.
-    
-    Hinweis: Viele Boolean-Flags wurden nach Integration der Features entfernt.
-    Nur noch aktive Flags werden getestet.
-    """
-    
-    def test_boolean_robustness_flags_default_true(self):
-        """Test: Verbleibende Boolean Robustness Flags sind standardmäßig True."""
-        # Diese Flags existieren noch und sind aktiv
-        boolean_flags = [
             "export_free_bounds_check",
             "self_heal_strict",
             "strict_topology_fallback_policy",
-            "detailed_boolean_history"
-        ]
-        
-        for flag in boolean_flags:
-            assert is_enabled(flag) is True, f"Boolean Flag {flag} sollte True sein"
-
-
-class TestOCPFeatureAuditFlags:
-    """Tests für OCP Feature Audit Feature Flags."""
-    
-    def test_ocp_audit_flags_default_true(self):
-        """Test: OCP Audit Flags sind standardmäßig True."""
-        audit_flags = [
             "mesh_converter_adaptive_tolerance",
-            "loft_sweep_hardening"
+            "detailed_boolean_history",
+            "helix_fitting_enabled",
+            "performance_regression_gate",
+            "rollback_validation",
+            "first_run_tutorial",
+            "incremental_solver",
+            "viewport_lod_system",
+            "viewport_frustum_culling",
+            "viewport_mesh_instancing",
         ]
-        
-        for flag in audit_flags:
-            assert is_enabled(flag) is True, f"OCP Audit Flag {flag} sollte True sein"
+
+        for flag in flags:
+            assert is_enabled(flag) is True, f"{flag} should default to True"
+
+    def test_printability_settings_exist(self):
+        flags = get_all_flags()
+        assert flags["printability_trust_gate"] is True
+        assert flags["printability_min_score"] == 60
+        assert flags["printability_block_on_critical"] is True
+
+    def test_solver_settings_exist(self):
+        flags = get_all_flags()
+        assert flags["solver_backend"] == "staged"
+        assert flags["solver_pre_validation"] is True
+        assert flags["solver_smooth_penalties"] is True
+        assert flags["sketch_solver_throttle_ms"] == 16
+        assert flags["preview_debounce_ms"] == 150
 
 
 class TestDebugFeatureFlags:
-    """Tests für Debug Feature Flags."""
-    
-    def test_debug_flags_default_false(self):
-        """Test: Debug Flags sind standardmäßig False."""
+    def test_debug_flags_can_be_toggled(self):
         debug_flags = [
             "sketch_input_logging",
             "tnp_debug_logging",
             "sketch_debug",
             "extrude_debug",
-            "viewport_debug"
+            "viewport_debug",
         ]
-        
-        for flag in debug_flags:
-            assert is_enabled(flag) is False, f"Debug Flag {flag} sollte False sein"
 
+        original_values = {flag: FEATURE_FLAGS[flag] for flag in debug_flags}
+        try:
+            for flag in debug_flags:
+                set_flag(flag, True)
+                assert is_enabled(flag) is True
 
-class TestNativeOCPHelixFlag:
-    """Tests für native_ocp_helix Flag.
-    
-    Hinweis: Flag wurde nach Integration des Features entfernt.
-    """
-    
-    def test_native_ocp_helix_removed(self):
-        """Test: native_ocp_helix wurde entfernt (Feature ist nun integriert)."""
-        assert is_enabled("native_ocp_helix") is False
+            for flag in debug_flags:
+                set_flag(flag, False)
+                assert is_enabled(flag) is False
+        finally:
+            for flag, value in original_values.items():
+                set_flag(flag, value)
 
-
-class TestAssemblySystemFlag:
-    """Tests für assembly_system Flag.
-    
-    Hinweis: Flag wurde nach Integration des Features entfernt.
-    """
-    
-    def test_assembly_system_removed(self):
-        """Test: assembly_system wurde entfernt (Feature ist nun integriert)."""
-        assert is_enabled("assembly_system") is False
-
-
-class TestFeatureFlagRuntimeModification:
-    """Tests für Laufzeit-Modifikation von Feature Flags."""
-    
-    def test_set_flag_to_true(self):
-        """Test: Flag auf True setzen."""
-        # cylindrical_face_edit ist standardmäßig False
-        assert is_enabled("cylindrical_face_edit") is False
-        
-        # Auf True setzen
-        set_flag("cylindrical_face_edit", True)
-        assert is_enabled("cylindrical_face_edit") is True
-        
-        # Wieder zurück auf False
-        set_flag("cylindrical_face_edit", False)
-        assert is_enabled("cylindrical_face_edit") is False
-    
-    def test_debug_flags_can_be_enabled(self):
-        """Test: Debug Flags können aktiviert werden."""
-        # Debug Flags testweise aktivieren
-        debug_flags = [
-            "tnp_debug_logging",
-            "sketch_debug"
-        ]
-        
-        for flag in debug_flags:
-            set_flag(flag, True)
-            assert is_enabled(flag) is True
-        
-        # Wieder deaktivieren
-        for flag in debug_flags:
-            set_flag(flag, False)
-            assert is_enabled(flag) is False
-    
-    def test_debug_flags_can_be_enabled(self):
-        """Test: Debug Flags können aktiviert werden."""
-        # Debug Flags testweise aktivieren
-        debug_flags = [
-            "tnp_debug_logging",
-            "sketch_debug"
-        ]
-        
-        for flag in debug_flags:
-            set_flag(flag, True)
-            assert is_enabled(flag) is True
-        
-        # Wieder deaktivieren
-        for flag in debug_flags:
-            set_flag(flag, False)
-            assert is_enabled(flag) is False
-
-
-# ============================================================================
-# RUN TESTS
-# ============================================================================
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

@@ -61,13 +61,7 @@ FEATURE_FLAG_DEFAULTS = {
     # UX Features
     "sketch_orientation_indicator": False,
     
-    # Assembly System (mate_system_v1, mate_solver sind noch Flags)
-    "mate_system_v1": True,
-    "mate_solver": True,
-    
-    # OCP Advanced (verbleibende Flags)
-    "ocp_advanced_flags": True,
-    "wall_thickness_analysis": True,
+    # OCP Runtime Policies
     "self_heal_strict": True,
     
     # W28+ Determinism Core Policy (CRITICAL: must be True for cross-suite isolation)
@@ -75,15 +69,7 @@ FEATURE_FLAG_DEFAULTS = {
     
     # Export Validation
     "export_free_bounds_check": True,
-    "export_normals_check": False,
-    "export_auto_repair": True,
-    
-    # OCP Feature Audit Tier 3
     "mesh_converter_adaptive_tolerance": True,
-    "loft_sweep_hardening": True,
-    
-    # Cylindrical Face Edit (experimental)
-    "cylindrical_face_edit": False,
     
     # UX-001: First-Run Guided Flow
     "first_run_tutorial": True,
@@ -92,7 +78,6 @@ FEATURE_FLAG_DEFAULTS = {
     "solver_backend": "staged",
     "solver_pre_validation": True,
     "solver_smooth_penalties": True,
-    "solver_experimental_staged": True,
     
     # Sketch Performance
     "sketch_drag_optimization": True,
@@ -112,14 +97,10 @@ FEATURE_FLAG_DEFAULTS = {
     "export_3mf": True,
     
     # Live Preview
-    "live_preview_textures": True,
-    "live_preview_patterns": True,
     "live_preview_shell": False,
     "live_preview_fillet": False,
     "live_preview_chamfer": False,
     "preview_debounce_ms": 150,
-    "preview_subdivisions_live": 3,
-    "preview_subdivisions_final": 5,
     
     # Normal Map Preview
     "normal_map_preview": False,
@@ -127,7 +108,6 @@ FEATURE_FLAG_DEFAULTS = {
     # Advanced
     "detailed_boolean_history": True,
     "helix_fitting_enabled": True,
-    "rc_burn_in_mode": False,
 }
 
 
