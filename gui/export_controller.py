@@ -477,17 +477,6 @@ class ExportController(QObject):
             Returns:
                 bool: True wenn Export erfolgreich
             """
-            from config.feature_flags import is_enabled
-            
-            # Feature Flag Check
-            if not is_enabled("export_3mf"):
-                QMessageBox.warning(
-                    None,
-                    tr("Export Fehler"),
-                    tr("3MF Export ist nicht aktiviert.")
-                )
-                return False
-            
             bodies = self._get_visible_bodies()
             if not bodies:
                 QMessageBox.warning(

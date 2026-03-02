@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 import pytest
 
@@ -39,7 +39,7 @@ def memory_samples(request):
 # Global Feature Flag Defaults - Single Source of Truth for Test Isolation
 # ========================================================================
 # WICHTIG: Jeder Test muss mit sauberen Feature-Flags starten.
-# Diese Defaults müssen mit config/feature_flags.py synchron gehalten werden.
+# Diese Defaults mÃ¼ssen mit config/feature_flags.py synchron gehalten werden.
 #
 # Entfernte Flags (Phase 1-5 Cleanup):
 # - assembly_system, batch_fillets, native_ocp_helix (permanent aktiviert)
@@ -84,7 +84,6 @@ FEATURE_FLAG_DEFAULTS = {
     "sketch_solver_throttle_ms": 16,
     
     # QA & Validation
-    "performance_regression_gate": True,
     "rollback_validation": True,
     
     # Geometry & Printability
@@ -94,12 +93,8 @@ FEATURE_FLAG_DEFAULTS = {
     "printability_block_on_critical": True,
     
     # Export
-    "export_3mf": True,
     
     # Live Preview
-    "live_preview_shell": False,
-    "live_preview_fillet": False,
-    "live_preview_chamfer": False,
     "preview_debounce_ms": 150,
     
     # Normal Map Preview
@@ -130,13 +125,13 @@ def _global_feature_flag_isolation():
     
     Dieses Fixture hat Vorrang vor modul-spezifischen Fixtures.
     """
-    # Pre-Test: Alle Flags auf Defaults zurücksetzen
+    # Pre-Test: Alle Flags auf Defaults zurÃ¼cksetzen
     for key, value in FEATURE_FLAG_DEFAULTS.items():
         set_flag(key, value)
     
     yield
     
-    # Post-Test: Alle Flags auf Defaults zurücksetzen (cleanup)
+    # Post-Test: Alle Flags auf Defaults zurÃ¼cksetzen (cleanup)
     for key, value in FEATURE_FLAG_DEFAULTS.items():
         set_flag(key, value)
 
@@ -152,7 +147,7 @@ def _tnp_debug_logging_only_for_tnp_suite(request: pytest.FixtureRequest):
     if _is_tnp_suite_test(request.node):
         set_flag("tnp_debug_logging", True)
         yield
-        # Cleanup wird von _global_feature_flag_isolation übernommen
+        # Cleanup wird von _global_feature_flag_isolation Ã¼bernommen
     else:
         # Non-TNP Tests: tnp_debug_logging bleibt False (via _global_feature_flag_isolation)
         yield
@@ -213,3 +208,4 @@ def _global_singleton_isolation():
         detector.clear_all_cache()
     except ImportError:
         pass
+

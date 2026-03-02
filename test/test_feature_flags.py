@@ -82,6 +82,7 @@ class TestRemovedIntegratedFlags:
         removed_flags = [
             "mate_system_v1",
             "mate_solver",
+            "export_3mf",
             "export_normals_check",
             "export_auto_repair",
             "ocp_advanced_flags",
@@ -90,12 +91,16 @@ class TestRemovedIntegratedFlags:
             "solver_experimental_staged",
             "live_preview_textures",
             "live_preview_patterns",
+            "live_preview_shell",
+            "live_preview_fillet",
+            "live_preview_chamfer",
             "preview_subdivisions_live",
             "preview_subdivisions_final",
             "cylindrical_face_edit",
             "rc_burn_in_mode",
             "assembly_system",
             "native_ocp_helix",
+            "performance_regression_gate",
         ]
 
         flags = get_all_flags()
@@ -108,14 +113,12 @@ class TestActiveRuntimePolicies:
     def test_core_runtime_flags_default_true(self):
         flags = [
             "geometry_drift_detection",
-            "export_3mf",
             "export_free_bounds_check",
             "self_heal_strict",
             "strict_topology_fallback_policy",
             "mesh_converter_adaptive_tolerance",
             "detailed_boolean_history",
             "helix_fitting_enabled",
-            "performance_regression_gate",
             "rollback_validation",
             "first_run_tutorial",
             "incremental_solver",

@@ -1,9 +1,9 @@
-"""
-Tests für 3MF Export Implementation
+﻿"""
+Tests fÃ¼r 3MF Export Implementation
 ====================================
 
 PR-001: 3MF Export Implementation
-Testet die 3MF Export-Funktionalität des ExportKernels.
+Testet die 3MF Export-FunktionalitÃ¤t des ExportKernels.
 
 Run: pytest test/test_export_3mf.py -v
 """
@@ -23,7 +23,6 @@ try:
         ExportFormat, ExportQuality, ExportCandidate,
         export_3mf
     )
-    from config.feature_flags import is_enabled
     DEPENDENCIES_AVAILABLE = True
 except ImportError:
     DEPENDENCIES_AVAILABLE = False
@@ -35,19 +34,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-class Test3MFFeatureFlag:
-    """Tests für 3MF Feature Flag."""
-    
-    def test_3mf_feature_flag_enabled(self):
-        """Test dass export_3mf Feature Flag aktiviert ist."""
-        assert is_enabled("export_3mf"), "export_3mf feature flag should be enabled"
-
-
 class Test3MFFileStructure:
-    """Tests für 3MF Datei-Struktur."""
+    """Tests fÃ¼r 3MF Datei-Struktur."""
     
     def test_3mf_is_valid_zip(self):
-        """Test dass 3MF Datei ein gültiges ZIP-Archiv ist."""
+        """Test dass 3MF Datei ein gÃ¼ltiges ZIP-Archiv ist."""
         # Mock solid mit einfacher Geometrie
         mock_solid = Mock()
         
@@ -71,11 +62,11 @@ class Test3MFFileStructure:
                 assert result.success, f"Export failed: {result.error_message}"
                 assert filepath.exists()
                 
-                # Prüfe ob es ein gültiges ZIP ist
+                # PrÃ¼fe ob es ein gÃ¼ltiges ZIP ist
                 assert zipfile.is_zipfile(filepath)
     
     def test_3mf_contains_required_files(self):
-        """Test dass 3MF alle erforderlichen Dateien enthält."""
+        """Test dass 3MF alle erforderlichen Dateien enthÃ¤lt."""
         mock_solid = Mock()
         
         with patch('modeling.cad_tessellator.CADTessellator') as MockTessellator:
@@ -126,7 +117,7 @@ class Test3MFFileStructure:
                     content = zf.read('[Content_Types].xml')
                     root = ET.fromstring(content)
                     
-                    # Prüfe Required Content Types
+                    # PrÃ¼fe Required Content Types
                     types = {t.get('Extension'): t.get('ContentType') for t in root.findall('{http://schemas.openxmlformats.org/package/2006/content-types}Default')}
                     
                     assert 'rels' in types
@@ -155,12 +146,12 @@ class Test3MFFileStructure:
                     content = zf.read('3D/3dmodel.model')
                     root = ET.fromstring(content)
                     
-                    # Prüfe root element (mit Namespace)
+                    # PrÃ¼fe root element (mit Namespace)
                     ns = '{http://schemas.microsoft.com/3dmanufacturing/core/2015/02}'
                     assert root.tag == ns + 'model' or root.tag == 'model'
                     assert root.get('unit') == 'millimeter'
                     
-                    # Prüfe resources/object/mesh Struktur
+                    # PrÃ¼fe resources/object/mesh Struktur
                     resources = root.find(ns + 'resources') or root.find('resources')
                     assert resources is not None
                     
@@ -181,7 +172,7 @@ class Test3MFFileStructure:
                     triangle_list = triangles.findall(ns + 'triangle') or triangles.findall('triangle')
                     assert len(triangle_list) == 1
                     
-                    # Prüfe build/item
+                    # PrÃ¼fe build/item
                     build = root.find(ns + 'build') or root.find('build')
                     assert build is not None
                     
@@ -198,7 +189,7 @@ class Test3MFFileStructure:
 
 
 class Test3MFExportWithGeometry:
-    """Tests für 3MF Export mit verschiedener Geometrie."""
+    """Tests fÃ¼r 3MF Export mit verschiedener Geometrie."""
     
     def test_export_simple_box(self):
         """Test 3MF Export eines einfachen Quaders."""
@@ -290,7 +281,7 @@ class Test3MFExportWithGeometry:
                 
                 assert result.success
                 
-                # Prüfe skalierte Vertices
+                # PrÃ¼fe skalierte Vertices
                 with zipfile.ZipFile(filepath, 'r') as zf:
                     content = zf.read('3D/3dmodel.model')
                     root = ET.fromstring(content)
@@ -311,7 +302,7 @@ class Test3MFExportWithGeometry:
 
 
 class Test3MFExportErrors:
-    """Tests für 3MF Export Fehlerbehandlung."""
+    """Tests fÃ¼r 3MF Export Fehlerbehandlung."""
     
     def test_export_empty_bodies_list(self):
         """Test Export mit leerer Body-Liste."""
@@ -325,7 +316,7 @@ class Test3MFExportErrors:
             assert result.error_code == "NO_VALID_BODIES"
     
     def test_export_no_valid_solids(self):
-        """Test Export wenn keine gültigen Solids vorhanden (Body ohne solid)."""
+        """Test Export wenn keine gÃ¼ltigen Solids vorhanden (Body ohne solid)."""
         mock_body = Mock()
         mock_body._build123d_solid = None
         mock_body.visible = True
@@ -341,7 +332,7 @@ class Test3MFExportErrors:
             assert result.error_code in ["NO_VALID_BODIES", "NO_MESH_DATA"]
     
     def test_export_tessellation_failure(self):
-        """Test Export wenn Tessellation fehlschlägt."""
+        """Test Export wenn Tessellation fehlschlÃ¤gt."""
         mock_solid = Mock()
         
         with patch('modeling.cad_tessellator.CADTessellator') as MockTessellator:
@@ -363,7 +354,7 @@ class Test3MFExportErrors:
 
 
 class Test3MFShortcutFunction:
-    """Tests für export_3mf Shortcut Funktion."""
+    """Tests fÃ¼r export_3mf Shortcut Funktion."""
     
     def test_export_3mf_shortcut(self):
         """Test export_3mf() Convenience Funktion."""
@@ -389,7 +380,7 @@ class Test3MFShortcutFunction:
 
 
 class Test3MFWithRealGeometry:
-    """Integration Tests mit echter OCP Geometrie (falls verfügbar)."""
+    """Integration Tests mit echter OCP Geometrie (falls verfÃ¼gbar)."""
     
     @pytest.mark.skip(reason="Requires full build123d Shape with .wrapped attribute - tested in integration tests")
     def test_export_real_box(self):
@@ -400,12 +391,12 @@ class Test3MFWithRealGeometry:
 
 
 class Test3MFRoundTrip:
-    """Tests für 3MF Round-Trip (Export + Import)."""
+    """Tests fÃ¼r 3MF Round-Trip (Export + Import)."""
     
     @pytest.mark.skip(reason="3MF Import not yet implemented")
     def test_3mf_roundtrip(self):
-        """Test Export und anschließender Import."""
-        # TODO: Implementieren wenn 3MF Import verfügbar
+        """Test Export und anschlieÃŸender Import."""
+        # TODO: Implementieren wenn 3MF Import verfÃ¼gbar
         pass
 
 

@@ -187,8 +187,6 @@ class MainWindow(
 
     def _execute_live_preview(self, feature_type: str):
         """Execute debounced live preview for a feature type."""
-        from config.feature_flags import is_enabled
-        
         config = self._preview_configs.get(feature_type)
         if not config:
             return
@@ -199,14 +197,11 @@ class MainWindow(
             elif feature_type == 'pattern':
                 self._execute_pattern_live_preview(config)
             elif feature_type == 'shell':
-                if is_enabled("live_preview_shell"):
-                    self._execute_shell_live_preview(config)
+                self._execute_shell_live_preview(config)
             elif feature_type == 'fillet':
-                if is_enabled("live_preview_fillet"):
-                    self._execute_fillet_live_preview(config)
+                self._execute_fillet_live_preview(config)
             elif feature_type == 'chamfer':
-                if is_enabled("live_preview_chamfer"):
-                    self._execute_chamfer_live_preview(config)
+                self._execute_chamfer_live_preview(config)
         except Exception as e:
             logger.debug(f"Live preview error for {feature_type}: {e}")
     
@@ -268,12 +263,6 @@ class MainWindow(
     
     def _request_live_preview(self, feature_type: str, config: dict):
         """Request a live preview with debouncing."""
-        from config.feature_flags import is_enabled
-        
-        flag_name = f"live_preview_{feature_type}"
-        if not is_enabled(flag_name):
-            return
-        
         self._preview_configs[feature_type] = config
         self._preview_timers[feature_type].start(self._preview_debounce_ms)
     

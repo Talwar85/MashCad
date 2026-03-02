@@ -1,4 +1,4 @@
-"""
+﻿"""
 MashCAD - Performance Gate Tests
 =================================
 
@@ -475,28 +475,11 @@ class TestRunWithCorpusModels:
         assert exit_code in [0, 1]
 
 
-class TestFeatureFlag:
-    """Tests for feature flag integration."""
-    
-    def test_feature_flag_exists(self):
-        """Performance regression gate flag should exist."""
-        from config.feature_flags import is_enabled, FEATURE_FLAGS
-        
-        assert "performance_regression_gate" in FEATURE_FLAGS
-        assert is_enabled("performance_regression_gate") is True
-    
-    def test_feature_flag_can_be_disabled(self):
-        """Performance regression gate flag can be disabled."""
-        from config.feature_flags import set_flag, is_enabled, FEATURE_FLAGS
-        
-        original_value = FEATURE_FLAGS.get("performance_regression_gate", False)
-        
-        try:
-            set_flag("performance_regression_gate", False)
-            assert is_enabled("performance_regression_gate") is False
-        finally:
-            set_flag("performance_regression_gate", original_value)
+class TestGateExecution:
+    """Performance gate is always active now."""
 
+    def test_gate_script_exists(self):
+        from pathlib import Path
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        assert Path("scripts/gate_performance.ps1").exists()
+

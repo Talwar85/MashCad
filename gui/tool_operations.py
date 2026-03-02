@@ -1,4 +1,4 @@
-"""
+﻿"""
 MashCAD Tool Operations Module
 ===============================
 
@@ -142,7 +142,7 @@ class ToolMixin:
     
     def _start_transform_mode(self, mode):
         """
-        Startet den Transform-Modus für den ausgewählten Body.
+        Startet den Transform-Modus fÃ¼r den ausgewÃ¤hlten Body.
         
         Args:
             mode: "move", "rotate" oder "scale"
@@ -151,14 +151,14 @@ class ToolMixin:
         if not body:
             # Warte auf Body-Selektion
             self._pending_transform_mode = mode
-            self.statusBar().showMessage(f"Wähle einen Body zum {mode.title()}")
+            self.statusBar().showMessage(f"WÃ¤hle einen Body zum {mode.title()}")
             return
 
         self._show_transform_ui(body.id, body.name, mode)
 
     def _start_multi_body_transform(self, mode: str, bodies: list):
         """
-        Startet Transform-Modus für mehrere Bodies.
+        Startet Transform-Modus fÃ¼r mehrere Bodies.
         
         Args:
             mode: "move", "rotate" oder "scale"
@@ -167,15 +167,15 @@ class ToolMixin:
         if not bodies:
             return
 
-        # Zeige Transform-UI für den ersten Body
+        # Zeige Transform-UI fÃ¼r den ersten Body
         first_body = bodies[0]
         self._show_transform_ui(first_body.id, first_body.name, mode)
 
-        # Merke alle Bodies für Multi-Transform
+        # Merke alle Bodies fÃ¼r Multi-Transform
         self._transform_bodies = bodies
 
     def _show_transform_ui(self, body_id: str, body_name: str, mode: str = None):
-        """Zeigt Transform-UI für einen Body"""
+        """Zeigt Transform-UI fÃ¼r einen Body"""
         if mode:
             self.transform_panel.set_mode(mode)
 
@@ -205,10 +205,10 @@ class ToolMixin:
         self._selected_body_for_transform = None
 
     def _on_transform_panel_confirmed(self, mode: str, data):
-        """Handler wenn Transform im Panel bestätigt wird"""
+        """Handler wenn Transform im Panel bestÃ¤tigt wird"""
         body_id = self._get_selected_body_id()
         if not body_id:
-            logger.warning("Kein Body selektiert für Transform")
+            logger.warning("Kein Body selektiert fÃ¼r Transform")
             return
 
         self._on_body_transform_requested(body_id, mode, data)
@@ -219,7 +219,7 @@ class ToolMixin:
         self._hide_transform_ui()
 
     def _on_transform_mode_changed(self, mode: str):
-        """Handler wenn Transform-Modus geändert wird"""
+        """Handler wenn Transform-Modus geÃ¤ndert wird"""
         if hasattr(self.viewport_3d, 'set_transform_mode'):
             self.viewport_3d.set_transform_mode(mode)
         mode_to_action = {"move": "move_body", "rotate": "rotate_body", "scale": "scale_body"}
@@ -227,18 +227,18 @@ class ToolMixin:
             self.transform_toolbar.set_active(mode_to_action[mode])
 
     def _on_grid_size_changed(self, grid_size: float):
-        """Handler wenn Grid-Size geändert wird"""
+        """Handler wenn Grid-Size geÃ¤ndert wird"""
         if hasattr(self.viewport_3d, 'transform_state') and self.viewport_3d.transform_state:
             self.viewport_3d.transform_state.snap_grid_size = grid_size
 
     def _on_pivot_mode_changed(self, mode: str):
-        """Handler wenn Pivot-Mode geändert wird"""
+        """Handler wenn Pivot-Mode geÃ¤ndert wird"""
         if hasattr(self.viewport_3d, 'transform_state') and self.viewport_3d.transform_state:
             self.viewport_3d.transform_state.pivot_mode = mode
 
     def _get_selected_body_id(self) -> str:
-        """Gibt ID des aktuell für Transform selektierten Bodies zurück"""
-        # Priorität: Explizit selektierter Body
+        """Gibt ID des aktuell fÃ¼r Transform selektierten Bodies zurÃ¼ck"""
+        # PrioritÃ¤t: Explizit selektierter Body
         if hasattr(self, '_selected_body_for_transform') and self._selected_body_for_transform:
             return self._selected_body_for_transform
         
@@ -247,7 +247,7 @@ class ToolMixin:
         return body.id if body else None
 
     def _on_transform_values_live_update(self, x: float, y: float, z: float):
-        """Handler für Live-Update der Transform-Werte während Drag"""
+        """Handler fÃ¼r Live-Update der Transform-Werte wÃ¤hrend Drag"""
         if hasattr(self, 'transform_panel') and self.transform_panel and self.transform_panel.isVisible():
             if hasattr(self.transform_panel, 'set_values'):
                 self.transform_panel.set_values(x, y, z)
@@ -283,7 +283,7 @@ class ToolMixin:
     # =========================================================================
     
     def _start_point_to_point_move(self):
-        """Startet Point-to-Point Move Modus (CAD-Style) - OHNE Body-Selektion möglich"""
+        """Startet Point-to-Point Move Modus (CAD-Style) - OHNE Body-Selektion mÃ¶glich"""
         self._p2p_body_id = None
         self._p2p_repick_body = False
         
@@ -297,18 +297,18 @@ class ToolMixin:
         # Viewport in Pick-Modus versetzen
         self.viewport_3d.set_p2p_mode(True)
         
-        self.statusBar().showMessage("Point-to-Point: Ersten Punkt wählen")
+        self.statusBar().showMessage("Point-to-Point: Ersten Punkt wÃ¤hlen")
         logger.info("Point-to-Point Move gestartet")
 
     def _on_p2p_pick_body_requested(self):
         """Allow re-picking the body for point-to-point move."""
         self._p2p_repick_body = True
         self.viewport_3d.set_p2p_mode(True, pick_body=True)
-        self.statusBar().showMessage("Wähle den zu verschiebenden Body")
+        self.statusBar().showMessage("WÃ¤hle den zu verschiebenden Body")
 
     def _on_point_to_point_move(self, body_id: str, start_point: tuple, end_point: tuple):
         """
-        Führt Point-to-Point Move aus.
+        FÃ¼hrt Point-to-Point Move aus.
         
         Args:
             body_id: ID des zu verschiebenden Bodies
@@ -337,7 +337,7 @@ class ToolMixin:
         if hasattr(self, "p2p_panel"):
             self.p2p_panel.set_point(1, point)
             self.p2p_panel.start_pick(2)
-            self.statusBar().showMessage("Point-to-Point: Zweiten Punkt wählen")
+            self.statusBar().showMessage("Point-to-Point: Zweiten Punkt wÃ¤hlen")
 
     def _on_point_to_point_cancelled(self):
         """Handler wenn Point-to-Point abgebrochen wurde."""
@@ -349,7 +349,7 @@ class ToolMixin:
         self._reset_point_to_point_move()
 
     def _reset_point_to_point_move(self):
-        """Setzt Point-to-Point Move zurück."""
+        """Setzt Point-to-Point Move zurÃ¼ck."""
         if getattr(self, "_p2p_body_id", None):
             self.viewport_3d.set_p2p_mode(False)
         
@@ -385,12 +385,12 @@ class ToolMixin:
         # Viewport in Pick-Modus versetzen
         self.viewport_3d.set_measure_mode(True)
         
-        self.statusBar().showMessage("Mess-Modus: Ersten Punkt wählen")
+        self.statusBar().showMessage("Mess-Modus: Ersten Punkt wÃ¤hlen")
         logger.info("Mess-Modus gestartet")
 
     def _on_measure_point_picked(self, point):
         """Wird aufgerufen wenn ein Punkt im Measure-Modus gepickt wurde"""
-        # Pattern-Center-Pick hat Priorität vor normalem Measure-Workflow.
+        # Pattern-Center-Pick hat PrioritÃ¤t vor normalem Measure-Workflow.
         if getattr(self, '_pattern_center_pick_mode', False):
             if hasattr(self, '_on_pattern_center_picked'):
                 self._on_pattern_center_picked(point)
@@ -401,7 +401,7 @@ class ToolMixin:
         # Ersten Punkt setzen
         if self._measure_points[0] is None:
             self._measure_points[0] = point
-            self.statusBar().showMessage("Mess-Modus: Zweiten Punkt wählen")
+            self.statusBar().showMessage("Mess-Modus: Zweiten Punkt wÃ¤hlen")
             
         # Zweiten Punkt setzen und Distanz berechnen
         elif self._measure_points[1] is None:
@@ -451,17 +451,17 @@ class ToolMixin:
         """User wants to re-pick P1 or P2."""
         self._measure_points[which - 1] = None
         self.viewport_3d.set_measure_mode(True)
-        self.statusBar().showMessage(f"Wähle Punkt {which}")
+        self.statusBar().showMessage(f"WÃ¤hle Punkt {which}")
 
     def _clear_measure_points(self):
-        """Setzt Mess-Punkte zurück."""
+        """Setzt Mess-Punkte zurÃ¼ck."""
         self._measure_points = [None, None]
         self._clear_measure_actors()
         if hasattr(self, "measure_panel"):
             self.measure_panel.reset()
 
     def _close_measure_panel(self):
-        """Schließt das Measure-Panel."""
+        """SchlieÃŸt das Measure-Panel."""
         self._cancel_measure_mode()
 
     def _cancel_measure_mode(self):
@@ -565,14 +565,14 @@ class ToolMixin:
             if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
                 self.viewport_3d.set_pending_transform_mode(True)
             self.viewport_3d.setCursor(Qt.CrossCursor)
-            self.statusBar().showMessage(f"{mode.capitalize()}: Wähle einen Body")
+            self.statusBar().showMessage(f"{mode.capitalize()}: WÃ¤hle einen Body")
             return
 
         body = selected_bodies[0]
         self._activate_fillet_chamfer_for_body(body, mode)
 
     def _resolve_body_for_edge_selection(self, body_id: str):
-        """Robuster Body-Lookup für EdgeSelectionMixin."""
+        """Robuster Body-Lookup fÃ¼r EdgeSelectionMixin."""
         body = None
         if hasattr(self.document, 'find_body_by_id'):
             body = self.document.find_body_by_id(body_id)
@@ -581,7 +581,7 @@ class ToolMixin:
         return body
 
     def _activate_fillet_chamfer_for_body(self, body, mode: str):
-        """Aktiviert Fillet/Chamfer-Modus für einen Body."""
+        """Aktiviert Fillet/Chamfer-Modus fÃ¼r einen Body."""
         self._fillet_mode = mode
         self._fillet_target_body = body
         self._pending_fillet_mode = False
@@ -612,10 +612,10 @@ class ToolMixin:
             self.fillet_panel.update_edge_count(0)
         self.fillet_panel.show_at(self.viewport_3d)
 
-        self.statusBar().showMessage(f"{mode.title()}: Kanten wählen")
+        self.statusBar().showMessage(f"{mode.title()}: Kanten wÃ¤hlen")
 
     def _on_edge_selection_changed(self, count: int):
-        """Handler wenn sich die Kanten-Selektion ändert."""
+        """Handler wenn sich die Kanten-Selektion Ã¤ndert."""
         if hasattr(self, 'fillet_panel') and self.fillet_panel.isVisible():
             if hasattr(self.fillet_panel, 'update_edge_count'):
                 self.fillet_panel.update_edge_count(count)
@@ -635,7 +635,7 @@ class ToolMixin:
 
     def _on_fillet_confirmed(self):
         """
-        Wendet Fillet/Chamfer über die Feature-Pipeline mit Undo/Redo an.
+        Wendet Fillet/Chamfer Ã¼ber die Feature-Pipeline mit Undo/Redo an.
         """
         from PySide6.QtWidgets import QMessageBox
         from config.feature_flags import is_enabled
@@ -648,7 +648,7 @@ class ToolMixin:
             self._fillet_target_body = body
 
         if body is None:
-            logger.warning(f"{mode.capitalize()}: Kein Ziel-Body ausgewählt")
+            logger.warning(f"{mode.capitalize()}: Kein Ziel-Body ausgewÃ¤hlt")
             return
 
         # Selektierte Kanten vom Viewport holen
@@ -657,7 +657,7 @@ class ToolMixin:
         if not edges:
             res = QMessageBox.question(
                 self, "Keine Kanten",
-                "Keine Kanten ausgewählt. Alle Kanten bearbeiten?",
+                "Keine Kanten ausgewÃ¤hlt. Alle Kanten bearbeiten?",
                 QMessageBox.Yes | QMessageBox.No
             )
             if res == QMessageBox.Yes:
@@ -711,14 +711,14 @@ class ToolMixin:
                 if hasattr(edge, 'wrapped'):
                     ocp_edge_shapes.append(edge.wrapped)
 
-            # TNP Phase 2: Finde vorheriges Boolean-Feature (für History-Lookup)
+            # TNP Phase 2: Finde vorheriges Boolean-Feature (fÃ¼r History-Lookup)
             depends_on_feature_id = None
             from modeling import ExtrudeFeature
             for feat in reversed(body.features):
                 if isinstance(feat, ExtrudeFeature) and feat.operation in ["Join", "Cut", "Intersect"]:
                     depends_on_feature_id = feat.id
                     if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"TNP Phase 2: Fillet/Chamfer hängt von Feature {feat.name} ab")
+                        logger.debug(f"TNP Phase 2: Fillet/Chamfer hÃ¤ngt von Feature {feat.name} ab")
                     break
 
             # Feature erstellen (ZUERST - damit es eine ID bekommt)
@@ -741,17 +741,17 @@ class ToolMixin:
                     depends_on_feature_id=depends_on_feature_id
                 )
 
-            # TNP v4.0: ShapeIDs für ausgewählte Edges finden (nicht neu erstellen!)
+            # TNP v4.0: ShapeIDs fÃ¼r ausgewÃ¤hlte Edges finden (nicht neu erstellen!)
             edge_shape_ids = []
             if body._document and hasattr(body._document, '_shape_naming_service'):
                 service = body._document._shape_naming_service
                 for edge in edges:
-                    # Finde existierende ShapeID für diese Edge
+                    # Finde existierende ShapeID fÃ¼r diese Edge
                     shape_id = service.find_shape_id_by_edge(edge, require_exact=True)
                     if shape_id:
                         edge_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
-                            logger.debug(f"TNP v4.0: ShapeID gefunden für Edge: {shape_id.uuid[:8]}...")
+                            logger.debug(f"TNP v4.0: ShapeID gefunden fÃ¼r Edge: {shape_id.uuid[:8]}...")
                     else:
                         # Fallback: Edge jetzt registrieren, damit TNP weiterarbeiten kann
                         try:
@@ -766,21 +766,21 @@ class ToolMixin:
                                 logger.debug(f"TNP v4.0: Edge registriert (Fallback) {shape_id.uuid[:8]}...")
                         except Exception as e:
                             if is_enabled("tnp_debug_logging"):
-                                logger.warning(f"TNP v4.0: Keine ShapeID für Edge gefunden: {e}")
+                                logger.warning(f"TNP v4.0: Keine ShapeID fÃ¼r Edge gefunden: {e}")
             else:
                 if is_enabled("tnp_debug_logging"):
-                    logger.warning("TNP v4.0: Kein NamingService verfügbar")
+                    logger.warning("TNP v4.0: Kein NamingService verfÃ¼gbar")
 
             feature.edge_shape_ids = edge_shape_ids
             if is_enabled("tnp_debug_logging"):
-                logger.debug(f"TNP v4.0: {len(edge_shape_ids)} ShapeIDs für Feature {feature.id} gefunden")
+                logger.debug(f"TNP v4.0: {len(edge_shape_ids)} ShapeIDs fÃ¼r Feature {feature.id} gefunden")
 
-            # TNP v4.0: Keine zusätzliche Registrierung nötig
+            # TNP v4.0: Keine zusÃ¤tzliche Registrierung nÃ¶tig
             # ShapeIDs wurden bereits vom Extrude registriert
 
-            # KRITISCH: Verwende AddFeatureCommand für korrektes Undo/Redo!
+            # KRITISCH: Verwende AddFeatureCommand fÃ¼r korrektes Undo/Redo!
             # Das ruft body.add_feature() auf, was _rebuild() triggert.
-            # Geometry-Snapshot VOR Operation (für Operation Summary)
+            # Geometry-Snapshot VOR Operation (fÃ¼r Operation Summary)
             _pre_sig = self._solid_signature_safe(body)
 
             cmd = AddFeatureCommand(body, feature, self, description=f"{mode.capitalize()} R={radius}")
@@ -789,13 +789,13 @@ class ToolMixin:
             # Geometry-Snapshot NACH Operation
             _post_sig = self._solid_signature_safe(body)
 
-            # Prüfe ob Operation erfolgreich war
+            # PrÃ¼fe ob Operation erfolgreich war
             if body._build123d_solid is None or (hasattr(body, 'vtk_mesh') and body.vtk_mesh is None):
-                logger.warning(f"{mode.capitalize()} ließ Body leer - Undo")
+                logger.warning(f"{mode.capitalize()} lieÃŸ Body leer - Undo")
                 self.undo_stack.undo()
                 QMessageBox.warning(
                     self, "Fehler",
-                    f"{mode.capitalize()} fehlgeschlagen: Geometrie ungültig"
+                    f"{mode.capitalize()} fehlgeschlagen: Geometrie ungÃ¼ltig"
                 )
                 return
 
@@ -817,7 +817,7 @@ class ToolMixin:
             CADTessellator.notify_body_changed()
             self._update_body_from_build123d(body, body._build123d_solid)
 
-            # Aufräumen
+            # AufrÃ¤umen
             self._on_fillet_cancelled()
             self.browser.refresh()
 
@@ -831,13 +831,10 @@ class ToolMixin:
 
     def _on_fillet_radius_changed(self, radius):
         """
-        Callback wenn der Radius geändert wird.
-        Verwendet das Live-Preview-System für performante Vorschau.
+        Callback wenn der Radius geÃ¤ndert wird.
+        Verwendet das Live-Preview-System fÃ¼r performante Vorschau.
         """
-        from config.feature_flags import is_enabled
 
-        if not is_enabled("live_preview_fillet"):
-            return
 
         if not getattr(self, '_fillet_mode', False) or not getattr(self, '_fillet_target_body', None):
             return
@@ -887,7 +884,7 @@ class ToolMixin:
             self.viewport_3d.setCursor(Qt.CrossCursor)
             if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
                 self.viewport_3d.set_pending_transform_mode(True)
-            self.statusBar().showMessage("Shell: Wähle einen Body")
+            self.statusBar().showMessage("Shell: WÃ¤hle einen Body")
             return
 
         self._activate_shell_for_body(selected_bodies[0])
@@ -917,7 +914,7 @@ class ToolMixin:
         self.sweep_panel.reset()
         self.sweep_panel.show_at(self.viewport_3d)
 
-        self.statusBar().showMessage("Sweep: Profil wählen")
+        self.statusBar().showMessage("Sweep: Profil wÃ¤hlen")
 
     def _start_loft(self):
         """Startet den Loft-Modus."""
@@ -939,14 +936,14 @@ class ToolMixin:
         self.loft_panel.reset()
         self.loft_panel.show_at(self.viewport_3d)
 
-        self.statusBar().showMessage("Loft: Profile wählen")
+        self.statusBar().showMessage("Loft: Profile wÃ¤hlen")
 
     def _start_pattern(self):
         """Startet den Pattern-Modus."""
         self._pattern_mode = False
         self._pattern_target_body = None
         
-        # Prüfe ob Body selektiert
+        # PrÃ¼fe ob Body selektiert
         body = self._get_active_body()
         if body:
             self._activate_pattern_for_body(body)
@@ -955,14 +952,14 @@ class ToolMixin:
             self.viewport_3d.setCursor(Qt.CrossCursor)
             if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
                 self.viewport_3d.set_pending_transform_mode(True)
-            self.statusBar().showMessage("Wähle einen Body für Pattern")
+            self.statusBar().showMessage("WÃ¤hle einen Body fÃ¼r Pattern")
 
     def _start_texture_mode(self):
         """Startet den Texture-Modus."""
         self._texture_mode = False
         self._texture_target_body = None
         
-        # Prüfe ob Body selektiert
+        # PrÃ¼fe ob Body selektiert
         body = self._get_active_body()
         if body:
             self._activate_texture_for_body(body)
@@ -971,10 +968,10 @@ class ToolMixin:
             self.viewport_3d.setCursor(Qt.CrossCursor)
             if hasattr(self.viewport_3d, 'set_pending_transform_mode'):
                 self.viewport_3d.set_pending_transform_mode(True)
-            self.statusBar().showMessage("Wähle einen Body für Textur")
+            self.statusBar().showMessage("WÃ¤hle einen Body fÃ¼r Textur")
 
     def _activate_texture_for_body(self, body):
-        """Aktiviert Texture-Modus für einen Body."""
+        """Aktiviert Texture-Modus fÃ¼r einen Body."""
         if getattr(body, '_build123d_solid', None) is None:
             logger.warning(f"'{body.name}' hat keine CAD-Daten (nur Mesh).")
             return
@@ -1001,15 +998,16 @@ class ToolMixin:
             self.texture_panel.set_body(body)
         self.texture_panel.show_at(self.viewport_3d)
         
-        self.statusBar().showMessage("Textur: Einstellungen wählen")
+        self.statusBar().showMessage("Textur: Einstellungen wÃ¤hlen")
 
     # =========================================================================
     # Utility Methods
     # =========================================================================
 
     def _get_active_body(self):
-        """Hilfsfunktion: Gibt den aktuell im Browser ausgewählten Body zurück"""
+        """Hilfsfunktion: Gibt den aktuell im Browser ausgewÃ¤hlten Body zurÃ¼ck"""
         if hasattr(self, 'browser'):
             selected = self.browser.get_selected_bodies()
             return selected[0] if selected else None
         return None
+

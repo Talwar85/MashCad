@@ -28,9 +28,11 @@ Further removed flags:
 - parallel_rebuild (OCP/OpenCASCADE is not thread-safe)
 - use_solver_constraints, solver_visual_feedback, etc.
 - export_normals_check, export_auto_repair
+- export_3mf, performance_regression_gate
 - ocp_advanced_flags, wall_thickness_analysis, loft_sweep_hardening
 - solver_experimental_staged
 - live_preview_textures, live_preview_patterns
+- live_preview_shell, live_preview_fillet, live_preview_chamfer
 - preview_subdivisions_live, preview_subdivisions_final
 - cylindrical_face_edit, rc_burn_in_mode
 """
@@ -57,11 +59,6 @@ FEATURE_FLAGS: dict[str, bool] = {
     # UX Features
     # ========================================================================
     "sketch_orientation_indicator": False,
-
-    # ========================================================================
-    # Export Formats
-    # ========================================================================
-    "export_3mf": True,
 
     # ========================================================================
     # Export Validation
@@ -106,20 +103,12 @@ FEATURE_FLAGS: dict[str, bool] = {
     # ========================================================================
     # QA & Validation
     # ========================================================================
-    "performance_regression_gate": True,
     "rollback_validation": True,
 
     # ========================================================================
     # UX: First-Run Experience
     # ========================================================================
     "first_run_tutorial": True,
-
-    # ========================================================================
-    # Live Preview System
-    # ========================================================================
-    "live_preview_shell": True,
-    "live_preview_fillet": True,
-    "live_preview_chamfer": True,
 
     # ========================================================================
     # Normal Map Preview
