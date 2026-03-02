@@ -211,9 +211,9 @@ from sketcher import Sketch
 
 class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixin, BodyComputeExtendedMixin):
     """
-    3D-KÃ¶rper (Body) mit RobustPartBuilder Logik.
+    3D-Körper (Body) mit RobustPartBuilder Logik.
 
-    Phase 2 TNP: Integrierter TNP-Tracker fÃ¼r robuste Shape-Referenzierung.
+    Phase 2 TNP: Integrierter TNP-Tracker für robuste Shape-Referenzierung.
     
     Note: Methods are organized in mixins:
     - BodyRebuildMixin: _rebuild() and related methods
@@ -231,7 +231,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         self.features: List[Feature] = []
         self.rollback_index: Optional[int] = None  # None = all features active
         
-        # Referenz zum Document (fÃ¼r TNP v4.0 Naming Service)
+        # Referenz zum Document (für TNP v4.0 Naming Service)
         self._document = document
 
         # === Multi-Body Split-Tracking (AGENTS.md Phase 2) ===
@@ -246,15 +246,15 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
         # === TNP v4.0: Shape Naming Service (im Document) ===
         # Nicht mehr hier - Service ist jetzt im Document zentralisiert
-        
+
         # NOTE: Altes TNP-System (Phase 8.2/3) deaktiviert - v4.0 aktiv
 
         # === PHASE 7: Feature Dependency Graph ===
         self._dependency_graph = FeatureDependencyGraph()
         self._solid_checkpoints: dict = {}  # {feature_index: solid} - In-Memory Checkpoints
-        
+
         # === TNP v3.0: Solid Generation Tracking ===
-        # Wird inkrementiert wenn sich Solid durch Boolean Ã¤ndert
+        # Wird inkrementiert wenn sich Solid durch Boolean ändert
         # Features merken sich auf welcher Generation sie basieren
         self._solid_generation = 0
         self._last_boolean_feature_index = -1  # Index des letzten Boolean-Features
@@ -264,7 +264,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         self._mesh_cache = None       # pv.PolyData (Faces) - privat!
         self._edges_cache = None      # pv.PolyData (Edges) - privat!
         self._face_info_cache = {}    # {face_id: {"normal": (x,y,z), "center": (x,y,z)}} - B-Rep Info!
-        self._mesh_cache_valid = False  # Invalidiert wenn Solid sich Ã¤ndert
+        self._mesh_cache_valid = False  # Invalidiert wenn Solid sich ändert
 
         # Kosmetische Gewinde-Linien (Helix-Visualisierung ohne echte Geometrie)
         self._cosmetic_lines_cache = None   # pv.PolyData (Helix-Linien)
@@ -282,7 +282,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
     @classmethod
     def _get_tessellation_manager(cls):
-        """Lazy singleton manager for async tessellation requests."""
+        """Lazy singleton manager for deferred tessellation requests."""
         if cls._shared_tessellation_manager is None:
             from gui.workers.tessellation_worker import TessellationManager
             cls._shared_tessellation_manager = TessellationManager()
@@ -340,7 +340,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
     @vtk_mesh.setter
     def vtk_mesh(self, value):
-        """Setter fÃ¼r importierte Meshes (vor BREP-Konvertierung)"""
+        """Setter für importierte Meshes (vor BREP-Konvertierung)"""
         self._mesh_cache = value
         self._mesh_cache_valid = True
 
@@ -359,7 +359,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         return self._face_info_cache
 
     def get_brep_normal(self, face_id: int):
-        """Gibt die B-Rep Normale fÃ¼r eine Face-ID zurÃ¼ck (oder None)."""
+        """Gibt die B-Rep Normale für eine Face-ID zurück (oder None)."""
         info = self.face_info.get(face_id)
         if info:
             return info.get("normal")
@@ -374,7 +374,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             return
 
         # Generate from solid via CADTessellator WITH FACE IDs!
-        # Dies ermÃ¶glicht exakte Face-Selektion (statt Heuristik nach Normalen)
+        # Dies ermöglicht exakte Face-Selektion (statt Heuristik nach Normalen)
         self._mesh_cache, self._edges_cache, self._face_info_cache = CADTessellator.tessellate_with_face_ids(
             self._build123d_solid
         )
@@ -392,7 +392,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         return self._cosmetic_lines_cache
 
     def _regenerate_cosmetic_lines(self):
-        """Erzeugt Helix-Linien fÃ¼r alle kosmetischen ThreadFeatures."""
+        """Erzeugt Helix-Linien für alle kosmetischen ThreadFeatures."""
         self._cosmetic_lines_valid = True
         cosmetic_threads = [f for f in self.features
                             if isinstance(f, ThreadFeature) and f.cosmetic]
@@ -414,7 +414,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                 H = 0.8660254 * feat.pitch
                 groove_depth = 0.625 * H
 
-                # Zwei Helix-Linien: Innen- und AuÃŸenradius des Gewindes
+                # Zwei Helix-Linien: Innen- und Außenradius des Gewindes
                 for radius in [r - groove_depth, r]:
                     helix = Helix(
                         pitch=feat.pitch,
@@ -443,7 +443,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             if all_points:
                 points = np.vstack(all_points)
                 self._cosmetic_lines_cache = pv.PolyData(points, lines=all_lines)
-                logger.debug(f"[COSMETIC] {len(cosmetic_threads)} thread(s) â†’ "
+                logger.debug(f"[COSMETIC] {len(cosmetic_threads)} thread(s) → "
                              f"{points.shape[0]} pts helix lines")
             else:
                 self._cosmetic_lines_cache = None
@@ -452,10 +452,10 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             self._cosmetic_lines_cache = None
 
     def _get_solid_with_threads(self):
-        """Berechnet echte Gewinde auf einer Kopie des Solids (fÃ¼r Export).
+        """Berechnet echte Gewinde auf einer Kopie des Solids (für Export).
 
-        Iteriert Ã¼ber alle kosmetischen ThreadFeatures und wendet
-        _compute_thread() auf eine Kopie an. Original bleibt unverÃ¤ndert.
+        Iteriert über alle kosmetischen ThreadFeatures und wendet
+        _compute_thread() auf eine Kopie an. Original bleibt unverändert.
         """
         if self._build123d_solid is None:
             return None
@@ -477,12 +477,12 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         return current
 
     def invalidate_mesh(self):
-        """Invalidiert Mesh-Cache - nÃ¤chster Zugriff regeneriert automatisch"""
+        """Invalidiert Mesh-Cache - nächster Zugriff regeneriert automatisch"""
         self._mesh_cache_valid = False
         self._cosmetic_lines_valid = False
 
-        # WICHTIG: Auch Face-Info-Cache lÃ¶schen!
-        # Sonst bleiben alte Face-IDs bestehen die nach Boolean ungÃ¼ltig sind
+        # WICHTIG: Auch Face-Info-Cache löschen!
+        # Sonst bleiben alte Face-IDs bestehen die nach Boolean ungültig sind
         self._face_info_cache = {}
 
         # Phase 4.3: Auch Topology-Cache invalidieren
@@ -497,8 +497,8 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         """
         Phase 9: Startet Tessellation im Hintergrund (Non-Blocking).
 
-        Das Mesh wird asynchron generiert und via Callback zurÃ¼ckgegeben.
-        vtk_mesh Property bleibt synchron (fÃ¼r KompatibilitÃ¤t).
+        Das Mesh wird asynchron generiert und via Callback zurückgegeben.
+        vtk_mesh Property bleibt synchron (für Kompatibilität).
 
         Args:
             on_ready: Optional callback(body_id, mesh, edges, face_info)
@@ -547,12 +547,12 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         return worker
 
     def add_feature(self, feature: Feature, rebuild: bool = True):
-        """Feature hinzufÃ¼gen und optional Geometrie neu berechnen.
+        """Feature hinzufügen und optional Geometrie neu berechnen.
 
         Args:
-            feature: Das Feature das hinzugefÃ¼gt werden soll
-            rebuild: Wenn False, wird das Feature nur zur Liste hinzugefÃ¼gt
-                     ohne _rebuild() aufzurufen. NÃ¼tzlich wenn das Solid
+            feature: Das Feature das hinzugefügt werden soll
+            rebuild: Wenn False, wird das Feature nur zur Liste hinzugefügt
+                     ohne _rebuild() aufzurufen. Nützlich wenn das Solid
                      bereits durch eine direkte Operation (z.B. BRepFeat)
                      aktualisiert wurde.
         """
@@ -570,7 +570,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
             # Phase 7: Checkpoints nach diesem Feature invalidieren
             self._dependency_graph.remove_feature(feature.id)
-            # LÃ¶sche Checkpoints ab diesem Index
+            # Lösche Checkpoints ab diesem Index
             for idx in list(self._solid_checkpoints.keys()):
                 if idx >= feature_index:
                     del self._solid_checkpoints[idx]
@@ -585,7 +585,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         Nutzt den Dependency Graph um nur die betroffenen Features neu zu berechnen.
 
         Args:
-            feature: Das geÃ¤nderte Feature (muss bereits in self.features sein)
+            feature: Das geänderte Feature (muss bereits in self.features sein)
         """
         if feature not in self.features:
             logger.error(f"Feature '{feature.id}' nicht in Body '{self.name}' gefunden")
@@ -605,7 +605,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         """
         Wandelt Mesh in CAD-Solid um.
 
-        Verwendet DirectMeshConverter + BRepOptimizer fÃ¼r zuverlÃ¤ssige Konvertierung.
+        Verwendet DirectMeshConverter + BRepOptimizer für zuverlässige Konvertierung.
         Faces werden zu BREP konvertiert und dann mit UnifySameDomain optimiert.
         """
         if self._build123d_solid is not None:
@@ -616,7 +616,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             logger.warning("Keine Mesh-Daten vorhanden.")
             return False
 
-        logger.info(f"Starte Mesh-zu-BREP Konvertierung fÃ¼r '{self.name}'...")
+        logger.info(f"Starte Mesh-zu-BREP Konvertierung für '{self.name}'...")
         logger.info(f"  Mesh: {self.vtk_mesh.n_points} Punkte, {self.vtk_mesh.n_cells} Faces")
 
         try:
@@ -654,7 +654,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                 self._build123d_solid = solid
                 self.shape = solid.wrapped
 
-                # TNP v4.0: ShapeID-Registrierung fÃ¼r konvertierte Geometrie
+                # TNP v4.0: ShapeID-Registrierung für konvertierte Geometrie
                 try:
                     if self._document and hasattr(self._document, '_shape_naming_service'):
                         service = self._document._shape_naming_service
@@ -689,7 +689,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                 except Exception as e:
                     logger.debug(f"[TNP] Registrierung fehlgeschlagen: {e}")
 
-                # === NEU: ImportFeature erstellen fÃ¼r Rebuild-Support ===
+                # === NEU: ImportFeature erstellen für Rebuild-Support ===
                 # BREP serialisieren (via BytesIO Stream)
                 try:
                     from OCP.BRepTools import BRepTools
@@ -709,7 +709,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                             source_type="mesh_convert"
                         )
 
-                        # Alte Features lÃ¶schen und ImportFeature als Basis setzen
+                        # Alte Features löschen und ImportFeature als Basis setzen
                         self.features.clear()
                         self.features.append(import_feature)
 
@@ -720,11 +720,11 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
                 logger.success(f"Body '{self.name}' erfolgreich konvertiert!")
 
-                # Mesh neu berechnen (vom BREP abgeleitet fÃ¼r Konsistenz)
+                # Mesh neu berechnen (vom BREP abgeleitet für Konsistenz)
                 self._update_mesh_from_solid(solid)
                 return True
             else:
-                logger.warning("Konvertierung lieferte kein gÃ¼ltiges Solid.")
+                logger.warning("Konvertierung lieferte kein gültiges Solid.")
                 return False
 
         except Exception as e:
@@ -942,8 +942,8 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
     def _safe_operation(self, op_name, op_func, fallback_func=None, feature=None):
         """
-        Wrapper fÃ¼r kritische CAD-Operationen.
-        FÃ¤ngt Crashes ab und erlaubt Fallbacks.
+        Wrapper für kritische CAD-Operationen.
+        Fängt Crashes ab und erlaubt Fallbacks.
         """
         try:
             self._last_operation_error = ""
@@ -1049,7 +1049,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                         else "strict_topology_fallback_policy"
                     )
                     self._last_operation_error = (
-                        f"PrimÃ¤rpfad fehlgeschlagen: {err_msg}; "
+                        f"Primärpfad fehlgeschlagen: {err_msg}; "
                         f"{policy_reason} blockiert Fallback bei Topologie-Referenzen"
                     )
                     self._last_operation_error_details = self._build_operation_error_details(
@@ -1062,27 +1062,27 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                     if isinstance(tnp_failure, dict):
                         self._last_operation_error_details["tnp_failure"] = tnp_failure
                     logger.error(
-                        f"{policy_reason}: Fallback fÃ¼r '{op_name}' blockiert "
+                        f"{policy_reason}: Fallback für '{op_name}' blockiert "
                         "(Topologie-Referenzen aktiv)."
                     )
                     return None, "ERROR"
-                logger.debug(f"â†’ Versuche Fallback fÃ¼r '{op_name}'...")
+                logger.debug(f"→’ Versuche Fallback für '{op_name}'...")
                 try:
                     res_fallback = fallback_func()
                     if res_fallback:
-                        self._last_operation_error = f"PrimÃ¤rpfad fehlgeschlagen: {err_msg}; Fallback wurde verwendet"
+                        self._last_operation_error = f"Primärpfad fehlgeschlagen: {err_msg}; Fallback wurde verwendet"
                         self._last_operation_error_details = self._build_operation_error_details(
                             op_name=op_name,
                             code="fallback_used",
                             message=self._last_operation_error,
                             feature=feature,
                         )
-                        logger.debug(f"âœ“ Fallback fÃ¼r '{op_name}' erfolgreich.")
+                        logger.debug(f"âœ“ Fallback für '{op_name}' erfolgreich.")
                         return res_fallback, "WARNING"
                 except Exception as e2:
                     fallback_msg = str(e2).strip() or e2.__class__.__name__
                     self._last_operation_error = (
-                        f"PrimÃ¤rpfad fehlgeschlagen: {err_msg}; Fallback fehlgeschlagen: {fallback_msg}"
+                        f"Primärpfad fehlgeschlagen: {err_msg}; Fallback fehlgeschlagen: {fallback_msg}"
                     )
                     self._last_operation_error_details = self._build_operation_error_details(
                         op_name=op_name,
@@ -1091,20 +1091,20 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                         feature=feature,
                         fallback_error=fallback_msg,
                     )
-                    logger.error(f"âœ— Auch Fallback fehlgeschlagen: {fallback_msg}")
+                    logger.error(f"✗ Auch Fallback fehlgeschlagen: {fallback_msg}")
             
             return None, "ERROR"
 
     def _register_boolean_history(self, bool_result: BooleanResult, feature, operation_name: str = ""):
         """
-        Registriert Boolean-History fÃ¼r TNP v4.0.
+        Registriert Boolean-History für TNP v4.0.
 
         Wird nach erfolgreichen Boolean-Operationen aufgerufen um
         die BRepTools_History an die TNP-Systeme weiterzugeben.
 
         Args:
             bool_result: BooleanResult mit history-Attribut
-            feature: Das Feature das die Boolean-Operation ausgelÃ¶st hat
+            feature: Das Feature das die Boolean-Operation ausgelöst hat
             operation_name: Name der Operation (Join/Cut/Intersect)
         """
         boolean_history = getattr(bool_result, 'history', None)
@@ -1131,9 +1131,9 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
     def _register_fillet_chamfer_history(self, result_solid, history, feature, operation_type: str = "FILLET"):
         """
-        Registriert Fillet/Chamfer History fÃ¼r TNP v4.0.
+        Registriert Fillet/Chamfer History für TNP v4.0.
 
-        Phase 12: Nutzt BRepFilletAPI_MakeFillet.History() fÃ¼r prÃ¤zises Shape-Tracking
+        Phase 12: Nutzt BRepFilletAPI_MakeFillet.History() für präzises Shape-Tracking
         nach Fillet/Chamfer-Operationen.
 
         Args:
@@ -1246,21 +1246,21 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Solid
             from OCP.BRepCheck import BRepCheck_Analyzer
 
-            # PrÃ¼fe ob Shape valide ist
+            # Prüfe ob Shape valide ist
             analyzer = BRepCheck_Analyzer(shape)
             if analyzer.IsValid():
                 return shape
 
             logger.debug("Shape invalid, starte Reparatur...")
 
-            # ShapeFix_Shape fÃ¼r allgemeine Reparaturen - Phase 5: Zentralisierte Toleranzen
+            # ShapeFix_Shape für allgemeine Reparaturen - Phase 5: Zentralisierte Toleranzen
             fixer = ShapeFix_Shape(shape)
             fixer.SetPrecision(Tolerances.KERNEL_PRECISION)
             fixer.SetMaxTolerance(Tolerances.MESH_EXPORT)
             fixer.SetMinTolerance(Tolerances.KERNEL_PRECISION / 10)
 
             # HINWEIS: FixSolidMode() etc. sind GETTER, nicht Setter!
-            # Die Standardwerte sind bereits True fÃ¼r die meisten Modi.
+            # Die Standardwerte sind bereits True für die meisten Modi.
             # Wir verlassen uns auf die Defaults.
 
             if fixer.Perform():
@@ -1273,15 +1273,15 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                     return fixed_shape
                 else:
                     logger.warning("Shape nach Reparatur immer noch invalid")
-                    # Gib es trotzdem zurÃ¼ck - manchmal funktioniert es dennoch
+                    # Gib es trotzdem zurück - manchmal funktioniert es dennoch
                     return fixed_shape
             else:
                 logger.warning("ShapeFix Perform() fehlgeschlagen")
-                return shape  # Gib Original zurÃ¼ck
+                return shape  # Gib Original zurück
 
         except Exception as e:
             logger.warning(f"Shape-Reparatur Fehler: {e}")
-            return shape  # Gib Original zurÃ¼ck
+            return shape  # Gib Original zurück
 
     # ==================== PHASE 6: COMPUTE METHODS ====================
     # NOTE: _ocp_fillet und _ocp_chamfer wurden in OCP-AMP2 entfernt
@@ -1291,19 +1291,19 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
     def update_feature_references(self, feature_id: str, old_solid, new_solid):
         """
-        KompatibilitÃ¤ts-Hook bei Feature-Ã„nderungen.
+        Kompatibilitäts-Hook bei Feature-Änderungen.
 
         Args:
             feature_id: ID des modifizierten Features
-            old_solid: Solid VOR der Ã„nderung
-            new_solid: Solid NACH der Ã„nderung
+            old_solid: Solid VOR der Änderung
+            new_solid: Solid NACH der Änderung
         """
         if is_enabled("tnp_debug_logging"):
             logger.debug(f"TNP v4.0: Feature {feature_id} wurde modifiziert")
 
     def reorder_features(self, old_index: int, new_index: int) -> bool:
         """
-        Verschiebt ein Feature in der Liste und fÃ¼hrt Migration durch.
+        Verschiebt ein Feature in der Liste und führt Migration durch.
 
         Args:
             old_index: Aktuelle Position
@@ -1326,15 +1326,15 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         feature = self.features.pop(old_index)
         self.features.insert(new_index, feature)
 
-        logger.info(f"Feature '{feature.name}' verschoben: {old_index} â†’ {new_index}")
+        logger.info(f"Feature '{feature.name}' verschoben: {old_index} →’ {new_index}")
 
-        # Rebuild ausfÃ¼hren (inkl. automatischer Migration)
+        # Rebuild ausführen (inkl. automatischer Migration)
         try:
             self._rebuild()
             return True
         except Exception as e:
             logger.error(f"Rebuild nach Feature-Verschiebung fehlgeschlagen: {e}")
-            # RÃ¼ckgÃ¤ngig machen
+            # Rückgängig machen
             feature = self.features.pop(new_index)
             self.features.insert(old_index, feature)
             self._rebuild()
@@ -1364,7 +1364,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
         if not solid:
             return
 
-        # Invalidiere Cache - nÃ¤chster Zugriff auf vtk_mesh/vtk_edges regeneriert
+        # Invalidiere Cache - nächster Zugriff auf vtk_mesh/vtk_edges regeneriert
         self.invalidate_mesh()
 
         # Legacy Support leeren
@@ -1389,9 +1389,9 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
 
     def _check_free_bounds_before_export(self):
         """
-        OCP Feature Audit: PrÃ¼ft ob Body offene Kanten hat vor Export.
+        OCP Feature Audit: Prüft ob Body offene Kanten hat vor Export.
 
-        Offene Shells erzeugen STL-Dateien mit LÃ¶chern, die fÃ¼r 3D-Druck
+        Offene Shells erzeugen STL-Dateien mit Löchern, die für 3D-Druck
         unbrauchbar sind. Diese Warnung hilft dem User das Problem zu erkennen.
         """
         from config.feature_flags import is_enabled
@@ -1407,7 +1407,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             closed_compound = fb.GetClosedWires()
             open_compound = fb.GetOpenWires()
 
-            # GetClosedWires/GetOpenWires geben TopoDS_Compound zurÃ¼ck
+            # GetClosedWires/GetOpenWires geben TopoDS_Compound zurück
             def count_wires(compound):
                 exp = TopExp_Explorer(compound, TopAbs_WIRE)
                 n = 0
@@ -1422,12 +1422,12 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             if n_open > 0:
                 logger.warning(
                     f"âš ï¸ Body '{self.name}' hat {n_open} offene Kante(n)! "
-                    f"STL kÃ¶nnte LÃ¶cher haben â†’ 3D-Druck problematisch."
+                    f"STL könnte Löcher haben →’ 3D-Druck problematisch."
                 )
             elif n_closed > 0:
                 logger.warning(
                     f"âš ï¸ Body '{self.name}' hat {n_closed} geschlossene freie Wire(s). "
-                    f"MÃ¶gliches internes Shell-Problem."
+                    f"Mögliches internes Shell-Problem."
                 )
             else:
                 logger.debug(f"Export Free-Bounds Check: Body '{self.name}' ist geschlossen (OK)")
@@ -1457,12 +1457,12 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
             logger.error(f"Legacy STL-Export fehlgeschlagen: {e}")
             return False
 
-    # === PHASE 8.2: Persistente Speicherung fÃ¼r TNP ===
+    # === PHASE 8.2: Persistente Speicherung für TNP ===
     # (Serialization methods delegated to body_serialization module)
 
     def to_dict(self) -> dict:
         """
-        Serialisiert Body zu Dictionary fÃ¼r persistente Speicherung.
+        Serialisiert Body zu Dictionary für persistente Speicherung.
         
         Delegates to body_serialization.body_to_dict module.
         """

@@ -33,6 +33,8 @@ from typing import List, Optional, Any, Dict, Union, Callable
 from loguru import logger
 import numpy as np
 
+from modeling.ocp_thread_guard import ensure_ocp_main_thread
+
 
 class ExportFormat(Enum):
     """Unterstützte Export-Formate."""
@@ -218,7 +220,8 @@ class ExportKernel:
         # Format aus Extension ableiten falls nicht explizit gesetzt
         if options.format is None:
             options.format = ExportKernel._detect_format_from_extension(filepath)
-        
+
+        ensure_ocp_main_thread("export CAD bodies")
         logger.info(f"Exporting {len(bodies)} bodies to {filepath} ({options.format.value})")
         
         # Filtere gültige Kandidaten
@@ -281,7 +284,8 @@ class ExportKernel:
         # Format aus Extension ableiten falls nicht explizit gesetzt
         if options.format is None:
             options.format = ExportKernel._detect_format_from_extension(filepath)
-        
+
+        ensure_ocp_main_thread("export CAD shape")
         logger.info(f"Exporting shape to {filepath} ({options.format.value})")
         
         # Route zum Format-spezifischen Exporter für einzelne Shapes
@@ -330,6 +334,8 @@ class ExportKernel:
             ExportResult (kann Warnungen enthalten)
         """
         from modeling.export_validator import ExportValidator, ValidationSeverity
+
+        ensure_ocp_main_thread("validate and export CAD bodies")
         
         # Validierung durchführen
         candidates = ExportKernel._prepare_candidates(bodies)

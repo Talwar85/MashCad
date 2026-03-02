@@ -66,6 +66,34 @@ class Build123dProfileDetector:
         """Letzte Fehlermeldung (für Debugging)"""
         return self._last_error
 
+    def _point_key(self, x: float, y: float) -> Tuple[int, int]:
+        scale = max(self.tolerance, 1e-9)
+        return (round(x / scale), round(y / scale))
+
+    def _has_open_contours(self, lines, arcs) -> bool:
+        """Reject sketches with unmatched open endpoints before OCP face creation."""
+        endpoint_degree = {}
+
+        def add_endpoint(x: float, y: float) -> None:
+            key = self._point_key(x, y)
+            endpoint_degree[key] = endpoint_degree.get(key, 0) + 1
+
+        for line in lines:
+            add_endpoint(line.start.x, line.start.y)
+            add_endpoint(line.end.x, line.end.y)
+
+        for arc in arcs:
+            start_rad = math.radians(arc.start_angle)
+            end_rad = math.radians(arc.end_angle)
+            start_x = arc.center.x + arc.radius * math.cos(start_rad)
+            start_y = arc.center.y + arc.radius * math.sin(start_rad)
+            end_x = arc.center.x + arc.radius * math.cos(end_rad)
+            end_y = arc.center.y + arc.radius * math.sin(end_rad)
+            add_endpoint(start_x, start_y)
+            add_endpoint(end_x, end_y)
+
+        return any(degree % 2 != 0 for degree in endpoint_degree.values())
+
     def detect_profiles(self, sketch: 'Sketch', plane: Optional['Plane'] = None) -> List['Face']:
         """
         Konvertiert Sketch-Geometrie zu Build123d und findet alle geschlossenen Faces.
@@ -97,6 +125,11 @@ class Build123dProfileDetector:
             return []
 
         logger.debug(f"Profile-Detection: {len(lines)} Linien, {len(circles)} Kreise, {len(arcs)} Arcs")
+
+        if self._has_open_contours(lines, arcs):
+            self._last_error = "Offene Konturen im Sketch"
+            logger.debug(self._last_error)
+            return []
 
         try:
             # Methode 1: Direkte Edge-basierte Face-Erkennung mit OCP
@@ -237,12 +270,18 @@ class Build123dProfileDetector:
             logger.debug(f"Build123d: {wire_sequence.Length()} Wires gefunden")
 
             # 3. Wires zu Faces konvertieren
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+            from OCP.gp import gp_Pln, gp_Ax3, gp_Pnt, gp_Dir
+            from OCP.TopoDS import TopoDS
+            from OCP.TopAbs import TopAbs_WIRE
+
             faces = []
             gp_plane = gp_Pln(gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)))
 
             for i in range(1, wire_sequence.Length() + 1):
                 wire_shape = wire_sequence.Value(i)
-                wire = TopoDS_Wire(wire_shape)
+                # FIX: TopoDS.Wire() statt TopoDS_Wire(wire_shape)
+                wire = TopoDS.Wire_s(wire_shape)
 
                 try:
                     is_closed = wire.Closed()
@@ -287,17 +326,19 @@ class Build123dProfileDetector:
                                 (line.end.x, line.end.y)
                             )
                         edges_created = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Linie zu BuildSketch fehlgeschlagen: {e}")
 
                 # Kreise (geschlossene Kurven = automatisch Faces)
                 for circle in circles:
                     try:
+                        # FIX: Kreise direkt als Faces erstellen (Build123d Circle erzeugt automatisch Face)
                         with Locations([(circle.center.x, circle.center.y)]):
-                            B3DCircle(radius=circle.radius)
+                            circle_face = B3DCircle(radius=circle.radius)
+                        # B3DCircle in BuildSketch erzeugt automatisch ein Face
                         edges_created = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Kreis zu Face fehlgeschlagen: {e}")
 
                 # Arcs
                 for arc in arcs:
@@ -314,8 +355,8 @@ class Build123dProfileDetector:
                                 arc_size=sweep
                             )
                         edges_created = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Arc zu BuildSketch fehlgeschlagen: {e}")
 
                 if edges_created:
                     # make_face() findet alle geschlossenen Konturen

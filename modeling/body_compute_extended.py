@@ -320,13 +320,15 @@ class BodyComputeExtendedMixin:
 
         # Fallback: OCP Wire-Building aus Edges
         if profile_wire is None:
+            from OCP.TopoDS import TopoDS
+
             explorer = TopExp_Explorer(face_shape, TopAbs_EDGE)
             profile_wire_builder = BRepBuilderAPI_MakeWire()
             while explorer.More():
                 try:
-                    profile_wire_builder.Add(explorer.Current())
+                    profile_wire_builder.Add(TopoDS.Edge_s(explorer.Current()))
                 except Exception:
-                    pass
+                    logger.debug("Sweep: Edge konnte nicht in Profil-Wire uebernommen werden")
                 explorer.Next()
 
             if not profile_wire_builder.IsDone():
@@ -443,7 +445,7 @@ class BodyComputeExtendedMixin:
 
             path_edges = path_wire.edges() if hasattr(path_wire, 'edges') else []
             if not path_edges:
-                logger.warning("Sweep: Pfad hat keine Edges, Ã¼berspringe Profil-Verschiebung")
+                logger.warning("Sweep: Pfad hat keine Edges, überspringe Profil-Verschiebung")
                 return profile_face
 
             first_edge = path_edges[0]
@@ -486,7 +488,7 @@ class BodyComputeExtendedMixin:
 
     def _is_curved_path(self, path_wire) -> bool:
         """
-        Analysiert ob der Pfad gekrÃ¼mmt ist (nicht gerade).
+        Analysiert ob der Pfad gekrümmt ist (nicht gerade).
         """
         try:
             edges = list(path_wire.edges()) if hasattr(path_wire, 'edges') else []

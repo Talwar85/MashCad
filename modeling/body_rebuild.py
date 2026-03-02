@@ -29,8 +29,8 @@ class BodyRebuildMixin:
         Args:
             rebuild_up_to: Optional int - nur Features bis zu diesem Index (exklusiv) anwenden.
                            None = alle Features. Wird fuer Rollback-Bar verwendet.
-            changed_feature_id: Optional str - ID des geÃ¤nderten Features fÃ¼r inkrementellen Rebuild.
-                                Phase 7: Nutzt Checkpoints fÃ¼r schnelleren Restart.
+            changed_feature_id: Optional str - ID des geänderten Features für inkrementellen Rebuild.
+                                Phase 7: Nutzt Checkpoints für schnelleren Restart.
         """
         # Import here to avoid circular imports
         from modeling.features import (
@@ -111,7 +111,7 @@ class BodyRebuildMixin:
             diag = metrics.get("bbox_diag")
             diag_text = "n/a" if diag is None else f"{float(diag):.3f}"
             return (
-                f"vol={vol_text}mmÂ³, "
+                f"vol={vol_text}mm³, "
                 f"faces={metrics.get('faces', 0)}, "
                 f"edges={metrics.get('edges', 0)}, "
                 f"diag={diag_text}mm"
@@ -243,7 +243,7 @@ class BodyRebuildMixin:
         self._mesh_vertices.clear()
         self._mesh_triangles.clear()
 
-        # Setze Status fÃ¼r Features VOR start_index (bereits computed)
+        # Setze Status für Features VOR start_index (bereits computed)
         for i in range(start_index):
             if i < len(self.features) and not self.features[i].suppressed:
                 self.features[i].status = "OK"  # Aus Checkpoint
@@ -278,7 +278,7 @@ class BodyRebuildMixin:
 
             if blocked_by_feature_error:
                 blocked_msg = (
-                    f"Nicht ausgefÃ¼hrt: vorheriges Feature "
+                    f"Nicht ausgeführt: vorheriges Feature "
                     f"'{blocked_by_feature_name}' (Index {blocked_by_feature_index}) fehlgeschlagen."
                 )
                 feature.status = "ERROR"
@@ -316,11 +316,11 @@ class BodyRebuildMixin:
 
             # ================= IMPORT (Base Feature) =================
             elif isinstance(feature, ImportFeature):
-                # ImportFeature enthÃ¤lt die Basis-Geometrie (z.B. konvertiertes Mesh)
+                # ImportFeature enthält die Basis-Geometrie (z.B. konvertiertes Mesh)
                 base_solid = feature.get_solid()
                 if base_solid is not None:
                     new_solid = base_solid
-                    logger.info(f"ImportFeature: Basis-Geometrie geladen ({base_solid.volume:.2f}mmÂ³)")
+                    logger.info(f"ImportFeature: Basis-Geometrie geladen ({base_solid.volume:.2f}mm³)")
                     if current_solid is None:
                         self._register_base_feature_shapes(feature, new_solid)
                 else:
@@ -329,11 +329,11 @@ class BodyRebuildMixin:
 
             # ================= EXTRUDE =================
             elif isinstance(feature, ExtrudeFeature):
-                # Push/Pull auf Body-Face: BRepFeat fÃ¼r Join/Cut verwenden.
+                # Push/Pull auf Body-Face: BRepFeat für Join/Cut verwenden.
                 has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
 
                 if has_polys and current_solid is not None and feature.operation in ("Join", "Cut"):
-                    # === PUSH/PULL auf Body-Face: Verwende BRepFeat fÃ¼r TNP-Robustheit ===
+                    # === PUSH/PULL auf Body-Face: Verwende BRepFeat für TNP-Robustheit ===
                     
                     def op_brepfeat():
                         return self._compute_extrude_part_brepfeat(feature, current_solid)
@@ -353,7 +353,7 @@ class BodyRebuildMixin:
                             logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
                         self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
                     else:
-                        # TNP v4 strict: Bei vorhandenen PrimÃ¤rreferenzen (ShapeID/Index)
+                        # TNP v4 strict: Bei vorhandenen Primärreferenzen (ShapeID/Index)
                         # KEIN Fallback auf polygon-basiertes Extrude+Boolean, da das
                         # semantisch eine andere Operation ergeben kann.
                         has_primary_face_ref = (
@@ -365,11 +365,11 @@ class BodyRebuildMixin:
                             new_solid = current_solid
                             logger.error(
                                 "Push/Pull: BRepFeat fehlgeschlagen bei vorhandenen "
-                                "TNP-PrimÃ¤rreferenzen (face_shape_id/face_index). "
+                                "TNP-Primärreferenzen (face_shape_id/face_index). "
                                 "Kein Boolean-Fallback."
                             )
                         else:
-                            # Legacy-Fallback nur ohne TNP-PrimÃ¤rreferenz.
+                            # Legacy-Fallback nur ohne TNP-Primärreferenz.
                             has_polys = False
                 
                 if not has_polys or current_solid is None:
@@ -389,7 +389,7 @@ class BodyRebuildMixin:
                             if is_enabled("extrude_debug"):
                                 logger.debug(f"TNP DEBUG: Extrude New Body - kein Boolean")
                             
-                            # === TNP v4.0: Shape-Registrierung fÃ¼r Extrude ===
+                            # === TNP v4.0: Shape-Registrierung für Extrude ===
                             if self._document and hasattr(self._document, '_shape_naming_service'):
                                 try:
                                     self._register_extrude_shapes(feature, new_solid)
@@ -397,7 +397,7 @@ class BodyRebuildMixin:
                                     if is_enabled("tnp_debug_logging"):
                                         logger.debug(f"TNP v4.0: Shape-Registrierung fehlgeschlagen: {tnp_e}")
                         else:
-                            # Boolean Operation Ã¼ber BooleanEngineV4
+                            # Boolean Operation über BooleanEngineV4
                             if is_enabled("extrude_debug"):
                                 logger.debug(f"TNP DEBUG: Extrude {feature.operation} startet...")
                             bool_result = BooleanEngineV4.execute_boolean_on_shapes(
@@ -412,7 +412,7 @@ class BodyRebuildMixin:
                                 # TNP v4.0: History an ShapeNamingService durchreichen
                                 self._register_boolean_history(bool_result, feature, operation_name=feature.operation)
 
-                                # Nach Boolean-Operation: Edge-Selektoren fÃ¼r nachfolgende Features aktualisieren
+                                # Nach Boolean-Operation: Edge-Selektoren für nachfolgende Features aktualisieren
                                 if new_solid is not None:
                                     if is_enabled("extrude_debug"):
                                         logger.debug(f"TNP DEBUG: Starte _update_edge_selectors_after_operation")
@@ -420,7 +420,7 @@ class BodyRebuildMixin:
                             else:
                                 logger.warning(f"âš ï¸ {feature.operation} fehlgeschlagen: {bool_result.message}")
                                 status = "ERROR"
-                                # Behalte current_solid (keine Ã„nderung)
+                                # Behalte current_solid (keine Änderung)
                                 continue
 
             # ================= PUSHPULL =================
@@ -440,7 +440,7 @@ class BodyRebuildMixin:
                 if pushpull_result and status == "SUCCESS":
                     new_solid = pushpull_result
                     if is_enabled("tnp_debug_logging"):
-                        logger.debug(f"PushPullFeature: Erfolgreich ausgefÃ¼hrt ({feature.operation}, d={feature.distance})")
+                        logger.debug(f"PushPullFeature: Erfolgreich ausgeführt ({feature.operation}, d={feature.distance})")
                     
                     self._update_edge_selectors_after_operation(new_solid, current_feature_index=i)
                 else:
@@ -451,8 +451,8 @@ class BodyRebuildMixin:
             # ================= FILLET =================
             elif isinstance(feature, FilletFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Fillet ausgefÃ¼hrt wird
-                    # Weil vorherige Features (Extrude, Boolean) das Solid verÃ¤ndert haben
+                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Fillet ausgeführt wird
+                    # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
                     self._update_edge_selectors_for_feature(feature, current_solid)
 
                     # Feature-ID sicherstellen
@@ -473,7 +473,7 @@ class BodyRebuildMixin:
 
                         if naming_service is None:
                             raise ValueError(
-                                "Fillet: TNP ShapeNamingService nicht verfÃ¼gbar. "
+                                "Fillet: TNP ShapeNamingService nicht verfügbar. "
                                 "Bitte Document mit TNP Service verwenden."
                             )
 
@@ -502,8 +502,8 @@ class BodyRebuildMixin:
             # ================= CHAMFER =================
             elif isinstance(feature, ChamferFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Chamfer ausgefÃ¼hrt wird
-                    # Weil vorherige Features (Extrude, Boolean) das Solid verÃ¤ndert haben
+                    # TNP-CRITICAL: Aktualisiere Edge-Selektoren BEVOR Chamfer ausgeführt wird
+                    # Weil vorherige Features (Extrude, Boolean) das Solid verändert haben
                     self._update_edge_selectors_for_feature(feature, current_solid)
 
                     # Feature-ID sicherstellen
@@ -524,7 +524,7 @@ class BodyRebuildMixin:
 
                         if naming_service is None:
                             raise ValueError(
-                                "Chamfer: TNP ShapeNamingService nicht verfÃ¼gbar. "
+                                "Chamfer: TNP ShapeNamingService nicht verfügbar. "
                                 "Bitte Document mit TNP Service verwenden."
                             )
 
@@ -652,7 +652,7 @@ class BodyRebuildMixin:
             # ================= SHELL (Phase 6) =================
             elif isinstance(feature, ShellFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Shell ausgefÃ¼hrt wird
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Shell ausgeführt wird
                     self._update_face_selectors_for_feature(feature, current_solid)
                     
                     def op_shell():
@@ -725,7 +725,7 @@ class BodyRebuildMixin:
             # ================= HOLE =================
             elif isinstance(feature, HoleFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Hole ausgefÃ¼hrt wird
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Hole ausgeführt wird
                     self._update_face_selectors_for_feature(feature, current_solid)
                     
                     def op_hole():
@@ -751,7 +751,7 @@ class BodyRebuildMixin:
             # ================= DRAFT =================
             elif isinstance(feature, DraftFeature):
                 if current_solid:
-                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Draft ausgefÃ¼hrt wird
+                    # TNP-CRITICAL: Aktualisiere Face-Selektoren BEVOR Draft ausgeführt wird
                     self._update_face_selectors_for_feature(feature, current_solid)
                     
                     def op_draft():
@@ -779,10 +779,10 @@ class BodyRebuildMixin:
                 if current_solid:
                     def op_split():
                         # Multi-Body Architecture (AGENTS.md Phase 2):
-                        # WÃ¤hrend Rebuild: Wenn dieser Body ein split_side hat, berechne nur diese Seite
+                        # Während Rebuild: Wenn dieser Body ein split_side hat, berechne nur diese Seite
                         if self.split_side and i == self.split_index:
                             # Rebuild-Modus: Nur unsere Seite berechnen
-                            # TemporÃ¤r keep_side Ã¼berschreiben fÃ¼r diesen Rebuild
+                            # Temporär keep_side überschreiben für diesen Rebuild
                             original_keep_side = feature.keep_side
                             feature.keep_side = self.split_side
                             result = self._compute_split(feature, current_solid)
@@ -791,11 +791,11 @@ class BodyRebuildMixin:
                         else:
                             # Normaler Split oder keep_side != "both"
                             result = self._compute_split(feature, current_solid)
-                            # Falls SplitResult zurÃ¼ckkommt (keep_side == "both"):
-                            # Das sollte nur beim ersten Split passieren, nicht wÃ¤hrend Rebuild
+                            # Falls SplitResult zurückkommt (keep_side == "both"):
+                            # Das sollte nur beim ersten Split passieren, nicht während Rebuild
                             # Use duck typing to avoid circular import: check for SplitResult attributes
                             if hasattr(result, 'body_above') and hasattr(result, 'body_below') and hasattr(result, 'split_plane'):
-                                # WÃ¤hrend Rebuild sollte das nicht passieren - Warnung!
+                                # Während Rebuild sollte das nicht passieren - Warnung!
                                 logger.warning("Split returned SplitResult during rebuild - using body_above as fallback")
                                 return result.body_above
                             return result
@@ -853,7 +853,7 @@ class BodyRebuildMixin:
                     code="self_heal_blocked_topology_warning",
                     message=self._last_operation_error,
                     feature=feature,
-                    hint="Feature-Referenzen neu auswÃ¤hlen oder Parameter reduzieren.",
+                    hint="Feature-Referenzen neu auswählen oder Parameter reduzieren.",
                 )
                 self._last_operation_error_details["rollback"] = {
                     "from": rollback_from,
@@ -873,7 +873,7 @@ class BodyRebuildMixin:
                     status = "ERROR"
                     new_solid = solid_before_feature
                     self._last_operation_error = (
-                        f"Strict Self-Heal: Feature '{feature.name}' erzeugte ungÃ¼ltige Geometrie "
+                        f"Strict Self-Heal: Feature '{feature.name}' erzeugte ungültige Geometrie "
                         f"({step_validation.message}) â€“ Rollback auf letzten validen Stand."
                     )
                     self._last_operation_error_details = self._build_operation_error_details(
@@ -915,7 +915,7 @@ class BodyRebuildMixin:
                         code="self_heal_rollback_geometry_drift",
                         message=self._last_operation_error,
                         feature=feature,
-                        hint="Chamfer/Fillet hat den Body global verÃ¤ndert. Auswahl/Parameter prÃ¼fen.",
+                        hint="Chamfer/Fillet hat den Body global verändert. Auswahl/Parameter prüfen.",
                     )
                     self._last_operation_error_details["rollback"] = {
                         "from": after_metrics,
@@ -951,7 +951,7 @@ class BodyRebuildMixin:
                     rollback_to,
                 )
 
-            # === Geometry Delta (Transparenz fÃ¼r Endanwender) ===
+            # === Geometry Delta (Transparenz für Endanwender) ===
             # Berechnet den Geometrie-Unterschied vor/nach jeder Feature-Anwendung.
             # Transient (_geometry_delta wird NICHT gespeichert, nur zur Laufzeit).
             effective_solid = new_solid if (new_solid is not None and status != "ERROR") else current_solid
@@ -1004,7 +1004,7 @@ class BodyRebuildMixin:
                     self._dependency_graph.create_checkpoint(i, feature.id, current_solid)
                     logger.debug(f"Phase 7: Checkpoint nach Feature {i} ('{feature.name}')")
 
-        # === PHASE 7: Dependency Graph aufrÃ¤umen ===
+        # === PHASE 7: Dependency Graph aufräumen ===
         if use_incremental:
             self._dependency_graph.clear_dirty()
 
@@ -1042,11 +1042,11 @@ class BodyRebuildMixin:
                     if strict_self_heal and active_topology_refs and topology_changed:
                         logger.error(
                             "Strict Self-Heal: Healing-Ergebnis verworfen "
-                            "(Topologie geÃ¤ndert bei aktiven TNP-Referenzen)."
+                            "(Topologie geändert bei aktiven TNP-Referenzen)."
                         )
                     elif healed_validation.is_error:
                         logger.warning(
-                            f"âš ï¸ Auto-Healing Ergebnis weiterhin ungÃ¼ltig: {healed_validation.message}"
+                            f"âš ï¸ Auto-Healing Ergebnis weiterhin ungültig: {healed_validation.message}"
                         )
                     else:
                         current_solid = healed
@@ -1078,10 +1078,10 @@ class BodyRebuildMixin:
             # Phase 9:
             # Globales UnifySameDomain nur ohne aktive TNP-Referenzen.
             # Sonst kann ein "post-history" Topologie-Merge ShapeIDs/Indices
-            # nachtrÃ¤glich ungÃ¼ltig machen.
+            # nachträglich ungültig machen.
             if self._has_active_topological_references(max_index=max_index):
                 if is_enabled("tnp_debug_logging"):
-                    logger.debug("UnifySameDomain (Rebuild) Ã¼bersprungen: aktive TNP-Referenzen vorhanden")
+                    logger.debug("UnifySameDomain (Rebuild) übersprungen: aktive TNP-Referenzen vorhanden")
             else:
                 try:
                     from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -1091,9 +1091,9 @@ class BodyRebuildMixin:
                     n_faces_before = len(current_solid.faces()) if hasattr(current_solid, 'faces') else 0
 
                     upgrader = ShapeUpgrade_UnifySameDomain(ocp_shape, True, True, True)
-                    # ErhÃ¶hte Toleranzen fÃ¼r besseres Zylinder-Merging
-                    upgrader.SetLinearTolerance(0.1)   # 0.1mm - groÃŸzÃ¼giger
-                    upgrader.SetAngularTolerance(0.1)  # ~5.7Â° - fÃ¼r zylindrische FlÃ¤chen
+                    # Erhöhte Toleranzen für besseres Zylinder-Merging
+                    upgrader.SetLinearTolerance(0.1)   # 0.1mm - großzügiger
+                    upgrader.SetAngularTolerance(0.1)  # ~5.7° - für zylindrische Flächen
                     upgrader.Build()
                     unified_shape = upgrader.Shape()
 
@@ -1102,10 +1102,10 @@ class BodyRebuildMixin:
                         n_faces_after = len(unified_solid.faces()) if hasattr(unified_solid, 'faces') else 0
 
                         if n_faces_after < n_faces_before:
-                            logger.debug(f"UnifySameDomain (Rebuild): {n_faces_before} â†’ {n_faces_after} Faces")
+                            logger.debug(f"UnifySameDomain (Rebuild): {n_faces_before} →’ {n_faces_after} Faces")
                             current_solid = unified_solid
                 except Exception as e:
-                    logger.debug(f"UnifySameDomain Ã¼bersprungen: {e}")
+                    logger.debug(f"UnifySameDomain übersprungen: {e}")
 
             try:
                 self._build123d_solid = current_solid
@@ -1115,7 +1115,7 @@ class BodyRebuildMixin:
                 # UPDATE MESH via Helper
                 self._update_mesh_from_solid(current_solid)
 
-                # B-Rep Faces zÃ¤hlen (echte CAD-Faces, nicht Tessellations-Dreiecke)
+                # B-Rep Faces zählen (echte CAD-Faces, nicht Tessellations-Dreiecke)
                 from modeling.cad_tessellator import CADTessellator
                 n_faces = CADTessellator.count_brep_faces(current_solid)
                 if n_faces == 0:
@@ -1209,15 +1209,15 @@ class BodyRebuildMixin:
 
     def _migrate_tnp_references(self, new_solid):
         """
-        KompatibilitÃ¤ts-Hook nach Rebuild.
+        Kompatibilitäts-Hook nach Rebuild.
 
-        Das alte TNP-v3 Registry-System wurde entfernt; TNP v4 wird Ã¼ber den
+        Das alte TNP-v3 Registry-System wurde entfernt; TNP v4 wird über den
         ShapeNamingService im Document gepflegt.
         """
         return
 
     def _feature_has_topological_references(self, feature) -> bool:
-        """PrÃ¼ft, ob ein Feature aktive Topologie-Referenzen trÃ¤gt."""
+        """Prüft, ob ein Feature aktive Topologie-Referenzen trägt."""
         if feature is None:
             return False
 

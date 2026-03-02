@@ -1,4 +1,4 @@
-"""
+﻿"""
 MashCad - Feature Preview Mixin
 Live preview methods for Shell, Fillet, and Chamfer operations.
 
@@ -22,9 +22,9 @@ from gui.viewport.render_queue import request_render
 
 class FeaturePreviewMixin:
     """
-    Mixin für PyVistaViewport mit Live-Preview-Methoden für Features.
+    Mixin fÃ¼r PyVistaViewport mit Live-Preview-Methoden fÃ¼r Features.
 
-    Enthält:
+    EnthÃ¤lt:
     - Shell thickness preview
     - Fillet radius preview
     - Chamfer size preview
@@ -63,26 +63,24 @@ class FeaturePreviewMixin:
 
     def update_shell_preview(self, thickness: float, opening_faces: list = None):
         """
-        Aktualisiert die Shell-Vorschau basierend auf der Wandstärke.
+        Aktualisiert die Shell-Vorschau basierend auf der WandstÃ¤rke.
 
         Args:
-            thickness: Wandstärke in mm
-            opening_faces: Liste der Öffnungs-Flächen (optional)
+            thickness: WandstÃ¤rke in mm
+            opening_faces: Liste der Ã–ffnungs-FlÃ¤chen (optional)
         """
         if not HAS_PYVISTA:
             return
 
         try:
-            from config.feature_flags import is_enabled
-            if not is_enabled("live_preview_shell"):
-                return
+
 
             self._shell_preview_thickness = thickness
 
             # Alte Preview entfernen
             self._clear_shell_preview()
 
-            # Preview-Qualität setzen (live vs final)
+            # Preview-QualitÃ¤t setzen (live vs final)
             if hasattr(self, '_preview_quality'):
                 self._preview_quality = "live"
 
@@ -96,14 +94,14 @@ class FeaturePreviewMixin:
 
     def _generate_shell_preview(self, thickness: float, opening_faces: list = None):
         """
-        Generiert die VTK-Mesh-Preview für Shell-Operation.
+        Generiert die VTK-Mesh-Preview fÃ¼r Shell-Operation.
 
         Uses a visual approximation by creating an offset mesh along face normals.
         This is fast and gives good visual feedback without kernel operation.
 
         Args:
-            thickness: Wandstärke in mm (positiv = Verdickung nach außen)
-            opening_faces: Liste der Öffnungs-Flächen (optional)
+            thickness: WandstÃ¤rke in mm (positiv = Verdickung nach auÃŸen)
+            opening_faces: Liste der Ã–ffnungs-FlÃ¤chen (optional)
         """
         if not hasattr(self, 'bodies') or not self.bodies:
             return
@@ -125,7 +123,7 @@ class FeaturePreviewMixin:
             if mesh is None:
                 return
 
-            # Kopie erstellen für Preview
+            # Kopie erstellen fÃ¼r Preview
             preview_mesh = mesh.copy()
 
             # Wende Offset an entlang der Normalen (simuliert Shell-Verdickung)
@@ -142,14 +140,14 @@ class FeaturePreviewMixin:
                 if normals is not None:
                     preview_mesh.points = preview_mesh.points + normals * thickness
 
-            # Normalen neu berechnen für korrektes Shading
+            # Normalen neu berechnen fÃ¼r korrektes Shading
             preview_mesh.compute_normals(inplace=True)
 
-            # Farbe basierend auf Dicke (Grün = positiv, Rot = negativ)
+            # Farbe basierend auf Dicke (GrÃ¼n = positiv, Rot = negativ)
             color = '#66ff66' if thickness >= 0 else '#ff6666'
-            opacity = 0.4  # Transparenz für Preview
+            opacity = 0.4  # Transparenz fÃ¼r Preview
 
-            # Preview-Mesh hinzufügen
+            # Preview-Mesh hinzufÃ¼gen
             self.plotter.add_mesh(
                 preview_mesh,
                 color=color,
@@ -190,16 +188,14 @@ class FeaturePreviewMixin:
             return
 
         try:
-            from config.feature_flags import is_enabled
-            if not is_enabled("live_preview_fillet"):
-                return
+
 
             self._fillet_preview_radius = radius
 
             # Alte Preview entfernen
             self._clear_fillet_preview()
 
-            # Preview-Qualität setzen
+            # Preview-QualitÃ¤t setzen
             if hasattr(self, '_preview_quality'):
                 self._preview_quality = "live"
 
@@ -213,7 +209,7 @@ class FeaturePreviewMixin:
 
     def _generate_fillet_preview(self, radius: float):
         """
-        Generiert die VTK-Mesh-Preview für Fillet-Operation.
+        Generiert die VTK-Mesh-Preview fÃ¼r Fillet-Operation.
 
         Creates tube geometry along selected edges to visualize fillets.
         This is a visual approximation - actual fillets require kernel operation.
@@ -240,7 +236,7 @@ class FeaturePreviewMixin:
             if not selected_edges:
                 return
 
-            # Für jede Kante einen Tubus erstellen (simuliert Fillet)
+            # FÃ¼r jede Kante einen Tubus erstellen (simuliert Fillet)
             for i, edge in enumerate(selected_edges):
                 try:
                     # Punkte der Kante
@@ -307,16 +303,14 @@ class FeaturePreviewMixin:
             return
 
         try:
-            from config.feature_flags import is_enabled
-            if not is_enabled("live_preview_chamfer"):
-                return
+
 
             self._chamfer_preview_distance = distance
 
             # Alte Preview entfernen
             self._clear_chamfer_preview()
 
-            # Preview-Qualität setzen
+            # Preview-QualitÃ¤t setzen
             if hasattr(self, '_preview_quality'):
                 self._preview_quality = "live"
 
@@ -330,7 +324,7 @@ class FeaturePreviewMixin:
 
     def _generate_chamfer_preview(self, distance: float):
         """
-        Generiert die VTK-Mesh-Preview für Chamfer-Operation.
+        Generiert die VTK-Mesh-Preview fÃ¼r Chamfer-Operation.
 
         Creates tapered tube geometry along selected edges to visualize chamfers.
         This is a visual approximation - actual chamfers require kernel operation.
@@ -357,7 +351,7 @@ class FeaturePreviewMixin:
             if not selected_edges:
                 return
 
-            # Für jede Kante einen konischen Tubus erstellen (simuliert Chamfer)
+            # FÃ¼r jede Kante einen konischen Tubus erstellen (simuliert Chamfer)
             for i, edge in enumerate(selected_edges):
                 try:
                     # Punkte der Kante
@@ -375,7 +369,7 @@ class FeaturePreviewMixin:
                             [center[0] + edge.length/2, center[1], center[2]]
                         ])
 
-                    # Erstelle Tube mit verjüngtem Radius (simuliert 45° Chamfer)
+                    # Erstelle Tube mit verjÃ¼ngtem Radius (simuliert 45Â° Chamfer)
                     if len(points) >= 2:
                         tube = pv.Line(points[0], points[-1])
                         # Chamfer: Radius nimmt ab (tapered)
@@ -388,7 +382,7 @@ class FeaturePreviewMixin:
                             opacity=0.6,
                             name=actor_name,
                             pickable=False,
-                            smooth_shading=False  # Flach für Chamfer-Look
+                            smooth_shading=False  # Flach fÃ¼r Chamfer-Look
                         )
 
                         self._chamfer_preview_actors.append(actor_name)
@@ -419,3 +413,4 @@ class FeaturePreviewMixin:
         self._clear_shell_preview()
         self._clear_fillet_preview()
         self._clear_chamfer_preview()
+

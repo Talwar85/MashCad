@@ -1181,13 +1181,13 @@ class SketchHandlersMixin:
         self._cancel_tool()
     
     def _handle_move(self, pos, snap_type, snap_entity=None):
-        """Verschieben: Basispunkt â†’ Zielpunkt (wie Fusion360)"""
+        """Verschieben: Basispunkt → Zielpunkt (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
-        
+
         if self.tool_step == 0:
-            # Schritt 1: Basispunkt wÃ¤hlen
+            # Schritt 1: Basispunkt wählen
             self.tool_points = [pos]
             self.tool_step = 1
             self.status_message.emit(tr("Target point | [Tab] for X/Y input"))
@@ -1200,9 +1200,9 @@ class SketchHandlersMixin:
             self.sketched_changed.emit()
             self._find_closed_profiles()
             self._cancel_tool()
-    
+
     def _move_selection(self, dx, dy):
-        """Verschiebt alle ausgewÃ¤hlten Elemente"""
+        """Verschiebt alle ausgewählten Elemente"""
         moved = set()
         for line in self.selected_lines:
             for pt in [line.start, line.end]:
@@ -1225,13 +1225,13 @@ class SketchHandlersMixin:
         self._solve_async()
     
     def _handle_copy(self, pos, snap_type, snap_entity=None):
-        """Kopieren: Basispunkt â†’ Zielpunkt (INKLUSIVE CONSTRAINTS)"""
+        """Kopieren: Basispunkt → Zielpunkt (INKLUSIVE CONSTRAINTS)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
-        
+
         if self.tool_step == 0:
-            # Schritt 1: Basispunkt wÃ¤hlen
+            # Schritt 1: Basispunkt wählen
             self.tool_points = [pos]
             self.tool_step = 1
             self.status_message.emit(tr("Target point for copy"))
@@ -1240,10 +1240,10 @@ class SketchHandlersMixin:
             dx = pos.x() - self.tool_points[0].x()
             dy = pos.y() - self.tool_points[0].y()
             self._save_undo()
-            
+
             # Wir nutzen die Helper-Methode, die jetzt auch Constraints kopiert
             self._copy_selection_with_offset(dx, dy)
-            
+
             self.sketched_changed.emit()
             self._find_closed_profiles()
             self._cancel_tool()
@@ -1257,9 +1257,9 @@ class SketchHandlersMixin:
         new_lines = []
         new_circles = []
         new_arcs = []
-        
-        # Mapping: Alte ID -> Neues Objekt (fÃ¼r Constraint-Rekonstruktion)
-        # Wir mÃ¼ssen Linien, Kreise UND Punkte mappen
+
+        # Mapping: Alte ID -> Neues Objekt (für Constraint-Rekonstruktion)
+        # Wir müssen Linien, Kreise UND Punkte mappen
         old_to_new = {}
 
         # 1. Linien kopieren
@@ -1304,15 +1304,15 @@ class SketchHandlersMixin:
         constraints_added = 0
 
         for c in list(self.sketch.constraints):
-            # PrÃ¼fen, ob ALLE Entities dieses Constraints in unserer Mapping-Tabelle sind.
+            # Prüfen, ob ALLE Entities dieses Constraints in unserer Mapping-Tabelle sind.
             # Das bedeutet, der Constraint bezieht sich nur auf kopierte Elemente (intern).
-            # Beispiel: Rechteck-SeitenlÃ¤nge (intern) -> Kopieren.
+            # Beispiel: Rechteck-Seitenlänge (intern) -> Kopieren.
             # Beispiel: Abstand Rechteck zu Ursprung (extern) -> Nicht kopieren.
-            
+
             is_internal = True
-            if not c.entities: 
+            if not c.entities:
                 is_internal = False
-            
+
             new_entities = []
             for entity in c.entities:
                 if hasattr(entity, 'id') and entity.id in old_to_new:
@@ -1320,7 +1320,7 @@ class SketchHandlersMixin:
                 else:
                     is_internal = False
                     break
-            
+
             if is_internal:
                 # Constraint klonen
                 new_c = Constraint(
@@ -1336,7 +1336,7 @@ class SketchHandlersMixin:
                 self.sketch.constraints.append(new_c)
                 constraints_added += 1
 
-        # Neue Elemente auswÃ¤hlen
+        # Neue Elemente auswählen
         self._clear_selection()
         self.selected_lines = new_lines
         self.selected_circles = new_circles
@@ -1347,13 +1347,13 @@ class SketchHandlersMixin:
             msg += f", {constraints_added} constraints"
         self.status_message.emit(msg)
     def _handle_rotate(self, pos, snap_type, snap_entity=None):
-        """Drehen: Zentrum â†’ Winkel (wie Fusion360)"""
+        """Drehen: Zentrum → Winkel (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
-        
+
         if self.tool_step == 0:
-            # Schritt 1: Drehzentrum wÃ¤hlen
+            # Schritt 1: Drehzentrum wählen
             self.tool_points = [pos]
             self.tool_step = 1
             self.status_message.emit(tr("Set rotation angle | Tab=Enter degrees"))
@@ -1366,30 +1366,30 @@ class SketchHandlersMixin:
             self.sketched_changed.emit()
             self._find_closed_profiles()
             self._cancel_tool()
-    
+
     def _rotate_selection(self, center, angle_deg):
         """
-        Rotiert Auswahl und entfernt dabei stÃ¶rende H/V Constraints.
+        Rotiert Auswahl und entfernt dabei störende H/V Constraints.
         """
         rad = math.radians(angle_deg)
         cos_a, sin_a = math.cos(rad), math.sin(rad)
         rotated = set()
-        
-        # 1. FIX: StÃ¶rende Constraints entfernen
-        # Horizontal/Vertical Constraints verhindern Rotation -> LÃ¶schen
-        # (Optional kÃ¶nnte man sie durch Perpendicular/Parallel ersetzen, 
-        # aber LÃ¶schen ist fÃ¼r freie Rotation sicherer)
+
+        # 1. FIX: Störende Constraints entfernen
+        # Horizontal/Vertical Constraints verhindern Rotation -> Löschen
+        # (Optional könnte man sie durch Perpendicular/Parallel ersetzen,
+        # aber Löschen ist für freie Rotation sicherer)
         constraints_to_remove = []
-        
-        # IDs der ausgewÃ¤hlten Elemente sammeln
+
+        # IDs der ausgewählten Elemente sammeln
         selected_ids = set()
         for l in self.selected_lines: selected_ids.add(l.id)
-        # W35-BF: Auch Arcs berÃ¼cksichtigen (kÃ¶nnen H/V Constraints haben)
+        # W35-BF: Auch Arcs berücksichtigen (können H/V Constraints haben)
         for arc in getattr(self, 'selected_arcs', []): selected_ids.add(arc.id)
-        
+
         for c in self.sketch.constraints:
             if c.type in [ConstraintType.HORIZONTAL, ConstraintType.VERTICAL]:
-                # Wenn das Constraint zu einer der rotierten Linien gehÃ¶rt
+                # Wenn das Constraint zu einer der rotierten Linien gehört
                 if c.entities and c.entities[0].id in selected_ids:
                     constraints_to_remove.append(c)
         
@@ -1473,14 +1473,14 @@ class SketchHandlersMixin:
         new_lines = []
         new_circles = []
         new_arcs = []
-        old_to_new = {}  # W35-BF: Mapping fÃ¼r Constraint-Kopie
-        
+        old_to_new = {}  # W35-BF: Mapping für Constraint-Kopie
+
         for line in self.selected_lines:
             sx, sy = mirror_point(line.start.x, line.start.y)
             ex, ey = mirror_point(line.end.x, line.end.y)
             new_line = self.sketch.add_line(sx, sy, ex, ey, construction=line.construction)
             new_lines.append(new_line)
-            # Mapping fÃ¼r Constraints
+            # Mapping für Constraints
             old_to_new[line.id] = new_line
             old_to_new[line.start.id] = new_line.start
             old_to_new[line.end.id] = new_line.end
@@ -1536,7 +1536,7 @@ class SketchHandlersMixin:
                 self.sketch.constraints.append(new_c)
                 constraints_added += 1
         
-        # Neue Elemente auswÃ¤hlen
+        # Neue Elemente auswählen
         self._clear_selection()
         self.selected_lines = new_lines
         self.selected_circles = new_circles
@@ -1551,17 +1551,17 @@ class SketchHandlersMixin:
     
     def _handle_pattern_linear(self, pos, snap_type):
         """
-        Lineares Muster: VollstÃ¤ndig interaktiv mit DimensionInput.
-        UX: 
-        1. User wÃ¤hlt Elemente.
+        Lineares Muster: Vollständig interaktiv mit DimensionInput.
+        UX:
+        1. User wählt Elemente.
         2. Aktiviert Tool.
         3. Klick definiert Startpunkt -> Mausbewegung definiert Richtung & Abstand (Vorschau).
-        4. Tab Ã¶ffnet Eingabe fÃ¼r prÃ¤zise Werte.
+        4. Tab öffnet Eingabe für präzise Werte.
         """
-        # Validierung: Nichts ausgewÃ¤hlt?
+        # Validierung: Nichts ausgewählt?
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             if hasattr(self, 'show_message'):
-                self.show_message("Bitte erst Elemente auswÃ¤hlen!", 2000, QColor(255, 200, 100))
+                self.show_message("Bitte erst Elemente auswählen!", 2000, QColor(255, 200, 100))
             else:
                 self.status_message.emit(tr("Select elements first!"))
             self.set_tool(SketchTool.SELECT) # Auto-Cancel
@@ -1597,10 +1597,10 @@ class SketchHandlersMixin:
             self._apply_linear_pattern(pos)
 
     def _show_pattern_linear_input(self):
-        """Zeigt DimensionInput fÃ¼r Linear Pattern"""
+        """Zeigt DimensionInput für Linear Pattern"""
         count = self.tool_data.get('pattern_count', 3)
         spacing = self.tool_data.get('pattern_spacing', 20.0)
-        fields = [("N", "count", float(count), "Ã—"), ("D", "spacing", spacing, "mm")]
+        fields = [("N", "count", float(count), "×"), ("D", "spacing", spacing, "mm")]
         self.dim_input.setup(fields)
 
         # Position neben Maus
@@ -1651,7 +1651,7 @@ class SketchHandlersMixin:
         self._cancel_tool()
 
     def _handle_pattern_circular(self, pos, snap_type):
-        """KreisfÃ¶rmiges Muster: Interaktiv mit DimensionInput"""
+        """Kreisförmiges Muster: Interaktiv mit DimensionInput"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             self.set_tool(SketchTool.SELECT)
@@ -1675,7 +1675,7 @@ class SketchHandlersMixin:
     def _show_pattern_circular_input(self):
         count = self.tool_data.get('pattern_count', 6)
         angle = self.tool_data.get('pattern_angle', 360.0)
-        fields = [("N", "count", float(count), "x"), ("âˆ ", "angle", angle, "Â°")]
+        fields = [("N", "count", float(count), "x"), ("∠", "angle", angle, "°")]
         self.dim_input.setup(fields)
         
         pos = self.mouse_screen
@@ -1730,13 +1730,13 @@ class SketchHandlersMixin:
         self._cancel_tool()
     
     def _handle_scale(self, pos, snap_type, snap_entity=None):
-        """Skalieren: Zentrum â†’ Faktor (wie Fusion360)"""
+        """Skalieren: Zentrum → Faktor (wie Fusion360)"""
         if not self.selected_lines and not self.selected_circles and not self.selected_arcs:
             self.status_message.emit(tr("Select elements first!"))
             return
-        
+
         if self.tool_step == 0:
-            # Schritt 1: Skalierungszentrum wÃ¤hlen
+            # Schritt 1: Skalierungszentrum wählen
             self.tool_points = [pos]
             self.tool_step = 1
             # Berechne initialen Abstand zur Auswahl
@@ -1766,7 +1766,7 @@ class SketchHandlersMixin:
             self._cancel_tool()
     
     def _scale_selection(self, center, factor):
-        """Skaliert alle ausgewÃ¤hlten Elemente vom Zentrum aus"""
+        """Skaliert alle ausgewählten Elemente vom Zentrum aus"""
         scaled = set()
         
         for line in self.selected_lines:
@@ -2463,7 +2463,7 @@ class SketchHandlersMixin:
         d1 = (d1[0]/len1, d1[1]/len1)
         d2 = (d2[0]/len2, d2[1]/len2)
 
-        # Winkel zwischen den Linien (immer der kleinere Winkel, 0 bis Ï€)
+        # Winkel zwischen den Linien (immer der kleinere Winkel, 0 bis π)
         dot = d1[0]*d2[0] + d1[1]*d2[1]
         dot = max(-1, min(1, dot))
         angle_between = math.acos(dot)

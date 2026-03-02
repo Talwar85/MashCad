@@ -26,13 +26,6 @@ from .constraints import (
     calculate_constraint_errors_batch
 )
 
-# W35 P2: Import neue Solver-Architektur
-from .solver_interface import (
-    ISolverBackend, SolverProblem, SolverOptions,
-    SolverBackendType, SolverBackendRegistry
-)
-
-
 @dataclass
 class SolverResult:
     """Ergebnis des Constraint-Solvers (W35: Erweitert um backend_used)"""
@@ -46,6 +39,8 @@ class SolverResult:
     n_constraints: int = 0
     dof: int = -1
     error_code: str = ""
+    requested_backend: str = ""
+    selection_detail: str = ""
 
 
 class ConstraintSolver:
@@ -76,6 +71,35 @@ class ConstraintSolver:
         
         self.progress_callback = None  # Callback für Live-Updates
         self.callback_interval = 10    # Alle N Iterationen
+
+    def _convert_unified_result(self, result) -> SolverResult:
+        """Map the unified solver result into the legacy result shape."""
+        return SolverResult(
+            success=result.success,
+            iterations=result.iterations,
+            final_error=result.final_error,
+            status=result.status,
+            message=result.message,
+            backend_used=result.backend_used,
+            n_variables=int(getattr(result, "n_variables", 0) or 0),
+            n_constraints=int(getattr(result, "n_constraints", 0) or 0),
+            dof=int(getattr(result, "dof", -1) if getattr(result, "dof", None) is not None else -1),
+            error_code=str(getattr(result, "error_code", "") or ""),
+            requested_backend=str(getattr(result, "requested_backend", "") or ""),
+            selection_detail=str(getattr(result, "selection_detail", "") or ""),
+        )
+
+    def _annotate_legacy_fallback(self, result: SolverResult, exc: Exception) -> SolverResult:
+        """Make Unified->legacy fallback visible to callers instead of only logging it."""
+        detail = f"unified solver raised {type(exc).__name__}: {exc}"
+        base_message = str(getattr(result, "message", "") or "").strip()
+        if detail not in base_message:
+            result.message = f"{base_message} | {detail}" if base_message else detail
+        result.requested_backend = str(getattr(result, "requested_backend", "") or "unified")
+        result.selection_detail = str(getattr(result, "selection_detail", "") or detail)
+        if not getattr(result, "error_code", ""):
+            result.error_code = "legacy_solver_fallback"
+        return result
 
     def _validate_pre_solve(self, lines, constraints) -> Tuple[bool, List[str]]:
         """
@@ -161,31 +185,6 @@ class ConstraintSolver:
 
         # W35 P2: Versuche neues Unified Solver Interface
         try:
-            # Erstelle Problem
-            options = SolverOptions(
-                regularization=self.regularization,
-                tolerance=self.tolerance
-            )
-
-            # Lese P1 Feature-Flags
-            try:
-                from config.feature_flags import is_enabled
-                options.pre_validation = is_enabled("solver_pre_validation")
-                options.smooth_penalties = is_enabled("solver_smooth_penalties")
-            except Exception:
-                pass
-
-            problem = SolverProblem(
-                points=points,
-                lines=lines,
-                circles=circles,
-                arcs=arcs,
-                constraints=constraints,
-                options=options,
-                # W35: Spline Control Points für Constraints
-                spline_control_points=spline_control_points
-            )
-
             # Verwende neues Unified Solver
             from .solver_interface import UnifiedConstraintSolver
             unified = UnifiedConstraintSolver()
@@ -195,25 +194,21 @@ class ConstraintSolver:
                 progress_callback=progress_callback,
                 callback_interval=callback_interval
             )
-            
-            # Konvertiere in altes SolverResult Format inkl. DOF-Metadaten
-            return SolverResult(
-                success=result.success,
-                iterations=result.iterations,
-                final_error=result.final_error,
-                status=result.status,
-                message=result.message,
-                backend_used=result.backend_used,
-                n_variables=int(getattr(result, "n_variables", 0) or 0),
-                n_constraints=int(getattr(result, "n_constraints", 0) or 0),
-                dof=int(getattr(result, "dof", -1) if getattr(result, "dof", None) is not None else -1),
-                error_code=str(getattr(result, "error_code", "") or ""),
-            )
-            
+
+            return self._convert_unified_result(result)
+
         except Exception as e:
             logger.warning(f"[Solver] UnifiedSolver failed, falling back to legacy: {e}")
-            return self._solve_legacy(points, lines, circles, arcs, constraints,
-                                       progress_callback, callback_interval)
+            legacy_result = self._solve_legacy(
+                points,
+                lines,
+                circles,
+                arcs,
+                constraints,
+                progress_callback,
+                callback_interval,
+            )
+            return self._annotate_legacy_fallback(legacy_result, e)
     
     def _solve_legacy(self, points, lines, circles, arcs, constraints, 
                       progress_callback=None, callback_interval=10) -> SolverResult:
@@ -244,7 +239,8 @@ class ConstraintSolver:
         try:
             from config.feature_flags import is_enabled
             pre_validation_enabled = is_enabled("solver_pre_validation")
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"[Solver] Could not read solver_pre_validation flag: {exc}")
             pre_validation_enabled = False
         
         if pre_validation_enabled:
@@ -432,9 +428,8 @@ class ConstraintSolver:
                 try:
                     if 'callback' in inspect.signature(least_squares).parameters:
                         lsq_kwargs['callback'] = iteration_callback
-                except Exception:
-                    # Ältere SciPy-Version ohne Signature/Callback-Support.
-                    pass
+                except Exception as exc:
+                    logger.debug(f"[Solver] least_squares callback detection failed: {exc}")
 
             result = least_squares(
                 error_function,
@@ -566,4 +561,5 @@ def auto_constrain_coincident(points: List[Point2D], tolerance: float = 5.0) -> 
             if p1.distance_to(p2) < tolerance:
                 constraints.append(make_coincident(p1, p2))
     return constraints
+
 

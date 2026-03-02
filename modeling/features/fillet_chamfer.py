@@ -63,6 +63,18 @@ class FilletFeature(Feature):
     # TNP Phase 2: Abhängigkeit zu vorherigem Boolean-Feature
     depends_on_feature_id: Optional[str] = None
 
+    # TNP v5.0: Input Edge UUIDs (edges selected for filleting)
+    tnp_v5_input_edge_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Output Edge UUIDs (fillet edges created)
+    tnp_v5_output_edge_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Output Face UUIDs (fillet faces created)
+    tnp_v5_output_face_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Selection contexts (one per selected edge)
+    tnp_v5_selection_contexts: list = field(default_factory=list)
+
     def __post_init__(self):
         self.type = FeatureType.FILLET
         if not self.name or self.name == "Feature":
@@ -107,6 +119,18 @@ class ChamferFeature(Feature):
 
     # TNP Phase 2: Abhängigkeit zu vorherigem Boolean-Feature
     depends_on_feature_id: Optional[str] = None
+
+    # TNP v5.0: Input Edge UUIDs (edges selected for chamfer)
+    tnp_v5_input_edge_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Output Edge UUIDs (chamfer edges created)
+    tnp_v5_output_edge_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Output Face UUIDs (chamfer faces created)
+    tnp_v5_output_face_ids: list = field(default_factory=list)
+
+    # TNP v5.0: Selection contexts (one per selected edge)
+    tnp_v5_selection_contexts: list = field(default_factory=list)
 
     def __post_init__(self):
         self.type = FeatureType.CHAMFER

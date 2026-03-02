@@ -92,24 +92,8 @@ fi
 # Gate Functions
 # ============================================================================
 
-CORE_TESTS=(
-    "test/test_feature_error_status.py"
-    "test/test_tnp_v4_1_regression_suite.py"
-    "test/test_trust_gate_core_workflow.py"
-    "test/test_cad_workflow_trust.py"
-    "test/test_brepopengun_offset_api.py"
-    "test/test_feature_flags.py"
-    "test/test_tnp_stability.py"
-    "test/test_feature_edit_robustness.py"
-    "test/test_feature_commands_atomic.py"
-    "test/test_project_roundtrip_persistence.py"
-    "test/test_showstopper_red_flag_pack.py"
-    "test/test_golden_model_regression_harness.py"
-    "test/test_core_cross_platform_contract.py"
-    "test/test_gate_evidence_contract.py"
-    "test/test_stability_dashboard_seed.py"
-    "test/test_parametric_reference_modelset.py"
-)
+CORE_MARKER="${CORE_MARKER:-not slow and not wip and not flaky}"
+CORE_WORKERS="${CORE_WORKERS:-4}"
 
 UI_TESTS=(
     "test/test_ui_abort_logic.py"
@@ -130,12 +114,32 @@ UI_TESTS=(
 run_core_gate() {
     echo ""
     echo -e "${CYAN}=== Running Core-Gate ===${NC}"
+    echo "Profile: marker='$CORE_MARKER', workers=$CORE_WORKERS"
     
     local start_time=$(date +%s)
     
-    # Run tests
+    # Keep Linux core behavior aligned with scripts/gate_core.ps1 (Windows).
     cd "$PROJECT_ROOT"
-    conda run -n cad_env python -m pytest -q "${CORE_TESTS[@]}" 2>&1 | tee test_output_core.txt
+
+    local pytest_args=(
+        -m "$CORE_MARKER"
+        --maxfail=30
+        -q
+    )
+
+    if conda run -n cad_env python -c "import xdist" >/dev/null 2>&1 && [[ "$CORE_WORKERS" -gt 1 ]]; then
+        pytest_args+=(-n "$CORE_WORKERS")
+    else
+        echo -e "  ${YELLOW}[INFO] pytest-xdist not available -> sequential mode${NC}"
+    fi
+
+    if conda run -n cad_env python -c "import pytest_timeout" >/dev/null 2>&1; then
+        pytest_args+=(--timeout=120)
+    else
+        echo -e "  ${YELLOW}[INFO] pytest-timeout not available -> timeout arg skipped${NC}"
+    fi
+
+    conda run -n cad_env python -m pytest "${pytest_args[@]}" 2>&1 | tee test_output_core.txt
     local exit_code=${PIPESTATUS[0]}
     
     local end_time=$(date +%s)
@@ -157,7 +161,7 @@ run_core_gate() {
     local total=$((passed + failed + skipped + errors))
     local pass_rate=0
     if [[ $total -gt 0 ]]; then
-        pass_rate=$(echo "scale=1; ($passed / $total) * 100" | bc)
+        pass_rate=$(awk "BEGIN { printf \"%.1f\", ($passed / $total) * 100 }")
     fi
     
     echo ""
@@ -178,7 +182,8 @@ run_core_gate() {
         cat > "$JSON_OUT" << EOF
 {
     "profile": "full",
-    "suites": $(printf '%s\n' "${CORE_TESTS[@]}" | jq -R . | jq -s .),
+    "marker": "$CORE_MARKER",
+    "workers": $CORE_WORKERS,
     "counts": {
         "passed": $passed,
         "failed": $failed,

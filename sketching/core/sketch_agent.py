@@ -19,6 +19,7 @@ from sketching.core.result_types import (
 )
 from sketching.analysis.reconstruction_agent import ReconstructionAgent
 from modeling import Body, ExtrudeFeature, FilletFeature
+from modeling.ocp_thread_guard import ensure_ocp_main_thread
 
 
 class SketchAgent:
@@ -82,6 +83,8 @@ class SketchAgent:
         start_time = time.time()
         operations = []
         sketches_created = []
+
+        ensure_ocp_main_thread("generate sketch-agent CAD part")
 
         try:
             logger.info(f"[SketchAgent] Generiere Part (complexity={complexity})")

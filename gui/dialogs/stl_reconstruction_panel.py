@@ -151,22 +151,22 @@ class STLReconstructionPanel(QWidget):
     
     def _setup_ui(self):
         """Initialize UI components."""
-        self.setWindowTitle("STL to CAD Reconstruction")
+        self.setWindowTitle(tr("STL to CAD Reconstruction"))
         self.setMinimumWidth(400)
         self.setMinimumHeight(600)
-        
+
         # Main layout
         layout = QVBoxLayout()
         layout.setSpacing(10)
         layout.setContentsMargins(10, 10, 10, 10)
-        
+
         # 1. Mesh Quality Section
-        self._quality_group = QGroupBox("Mesh Quality")
+        self._quality_group = QGroupBox(tr("Mesh Quality"))
         self._setup_quality_section()
         layout.addWidget(self._quality_group)
-        
+
         # 2. Feature List Section
-        self._features_group = QGroupBox("Detected Features")
+        self._features_group = QGroupBox(tr("Detected Features"))
         self._setup_features_section()
         layout.addWidget(self._features_group, stretch=2)
         
@@ -216,9 +216,9 @@ class STLReconstructionPanel(QWidget):
         
         # Header with check all/none buttons
         header_layout = QHBoxLayout()
-        self._check_all_btn = QPushButton("Check All")
+        self._check_all_btn = QPushButton(tr("Check All"))
         self._check_all_btn.clicked.connect(self._check_all_features)
-        self._uncheck_all_btn = QPushButton("Uncheck All")
+        self._uncheck_all_btn = QPushButton(tr("Uncheck All"))
         self._uncheck_all_btn.clicked.connect(self._uncheck_all_features)
         
         header_layout.addWidget(self._check_all_btn)
@@ -277,7 +277,7 @@ class STLReconstructionPanel(QWidget):
         )
         self._reconstruct_btn.clicked.connect(self._on_reconstruct_clicked)
         
-        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn = QPushButton(tr("Cancel"))
         self._cancel_btn.setEnabled(False)
         self._cancel_btn.clicked.connect(self._on_cancel_clicked)
         

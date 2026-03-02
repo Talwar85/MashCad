@@ -710,30 +710,54 @@ class FeatureMixin:
 
         elif d[0] == 'feature':
             feature = d[1]
-            body = d[2]
-
-            # CadQueryFeature: Öffne Script Editor
-            from modeling.features.cadquery_feature import CadQueryFeature
-            if isinstance(feature, CadQueryFeature):
-                self._edit_cadquery_feature(feature, body)
+            body = d[2] if len(d) > 2 else None
+            if body is None:
+                body = self._find_feature_owner_body(feature)
+            if body is None:
+                logger.warning(f"Feature '{feature.name}' hat keinen auflösbaren Owner-Body")
                 return
+            self._dispatch_feature_edit(feature, body)
 
-            from modeling import (TransformFeature, ExtrudeFeature, FilletFeature,
-                                  ChamferFeature, ShellFeature, RevolveFeature, FeatureType)
-            if isinstance(feature, TransformFeature) or feature.type == FeatureType.TRANSFORM:
-                self._edit_transform_feature(feature, body)
-            elif isinstance(feature, ExtrudeFeature):
-                self._edit_parametric_feature(feature, body, 'extrude')
-            elif isinstance(feature, FilletFeature):
-                self._edit_parametric_feature(feature, body, 'fillet')
-            elif isinstance(feature, ChamferFeature):
-                self._edit_parametric_feature(feature, body, 'chamfer')
-            elif isinstance(feature, ShellFeature):
-                self._edit_parametric_feature(feature, body, 'shell')
-            elif isinstance(feature, RevolveFeature):
-                self._edit_parametric_feature(feature, body, 'revolve')
-            else:
-                logger.info(f"Feature '{feature.name}' kann nicht editiert werden (Typ: {feature.type})")
+    def _dispatch_feature_edit(self, feature, body):
+        """Routet ein Feature zum passenden Edit-Dialog."""
+        from modeling.features.cadquery_feature import CadQueryFeature
+        from modeling import (
+            TransformFeature,
+            ExtrudeFeature,
+            PushPullFeature,
+            FilletFeature,
+            ChamferFeature,
+            ShellFeature,
+            RevolveFeature,
+            LoftFeature,
+            SweepFeature,
+            FeatureType,
+        )
+
+        feature_type = getattr(feature, 'type', None)
+
+        if isinstance(feature, CadQueryFeature) or feature_type == FeatureType.CADQUERY:
+            self._edit_cadquery_feature(feature, body)
+        elif isinstance(feature, TransformFeature) or feature_type == FeatureType.TRANSFORM:
+            self._edit_transform_feature(feature, body)
+        elif isinstance(feature, PushPullFeature) or feature_type == FeatureType.PUSHPULL:
+            self._edit_parametric_feature(feature, body, 'pushpull')
+        elif isinstance(feature, ExtrudeFeature) or feature_type == FeatureType.EXTRUDE:
+            self._edit_parametric_feature(feature, body, 'extrude')
+        elif isinstance(feature, FilletFeature) or feature_type == FeatureType.FILLET:
+            self._edit_parametric_feature(feature, body, 'fillet')
+        elif isinstance(feature, ChamferFeature) or feature_type == FeatureType.CHAMFER:
+            self._edit_parametric_feature(feature, body, 'chamfer')
+        elif isinstance(feature, ShellFeature) or feature_type == FeatureType.SHELL:
+            self._edit_parametric_feature(feature, body, 'shell')
+        elif isinstance(feature, RevolveFeature) or feature_type == FeatureType.REVOLVE:
+            self._edit_parametric_feature(feature, body, 'revolve')
+        elif isinstance(feature, LoftFeature) or feature_type == FeatureType.LOFT:
+            self._edit_parametric_feature(feature, body, 'loft')
+        elif isinstance(feature, SweepFeature) or feature_type == FeatureType.SWEEP:
+            self._edit_parametric_feature(feature, body, 'sweep')
+        else:
+            logger.info(f"Feature '{feature.name}' kann nicht editiert werden (Typ: {feature_type})")
 
     def _edit_transform_feature(self, feature, body):
         """
@@ -773,6 +797,15 @@ class FeatureMixin:
                 'operation': feature.operation,
             }
             dialog = ExtrudeEditDialog(feature, body, self)
+        elif feature_type == 'pushpull':
+            from gui.dialogs.feature_edit_dialogs import PushPullEditDialog
+            old_data = {
+                'distance': feature.distance,
+                'direction': feature.direction,
+                'operation': feature.operation,
+                'name': feature.name,
+            }
+            dialog = PushPullEditDialog(feature, body, self)
         elif feature_type == 'fillet':
             from gui.dialogs.feature_edit_dialogs import FilletEditDialog
             old_data = {'radius': feature.radius}
@@ -817,6 +850,13 @@ class FeatureMixin:
                     'distance': feature.distance,
                     'direction': feature.direction,
                     'operation': feature.operation,
+                }
+            elif feature_type == 'pushpull':
+                new_data = {
+                    'distance': feature.distance,
+                    'direction': feature.direction,
+                    'operation': feature.operation,
+                    'name': feature.name,
                 }
             elif feature_type == 'fillet':
                 new_data = {'radius': feature.radius}
@@ -1021,6 +1061,22 @@ class FeatureMixin:
         """Hilfsfunktion: Gibt den aktuell im Browser ausgewählten Body zurück"""
         selected = self.browser.get_selected_bodies()
         return selected[0] if selected else None
+
+    def _find_feature_owner_body(self, feature):
+        """Findet den Body, der das gegebene Feature enthält."""
+        if feature is None:
+            return None
+
+        feature_id = getattr(feature, 'id', None)
+        for body in self._all_document_bodies():
+            body_features = list(getattr(body, 'features', []) or [])
+            if feature in body_features:
+                return body
+            if feature_id is not None:
+                for candidate in body_features:
+                    if getattr(candidate, 'id', None) == feature_id:
+                        return body
+        return None
     
     def _extrude_body_face_build123d(self, face_data, height, operation):
         """
@@ -1170,14 +1226,17 @@ class FeatureMixin:
             return False
 
         # Extractionsrichtung (umgekehrt wenn Push/negativ)
-        direction = -1 if height < 0 else 1
-        distance = abs(height)
-
-        # Operation-Typ bestimmen
-        if height < 0:
-            op_type = "cut"  # Push = Material entfernen
+        requested_operation = str(operation or "").strip().lower()
+        if requested_operation in {"join", "cut"}:
+            op_type = requested_operation
         else:
-            op_type = "join"  # Pull = Material hinzufügen
+            op_type = "cut" if height < 0 else "join"
+
+        direction = -1 if op_type == "cut" else 1
+        distance = abs(float(height))
+        if distance <= 0:
+            logger.warning("Push/Pull abgebrochen: Distanz muss > 0 sein")
+            return False
 
         # GeometricFaceSelector als Recovery-Info
         face_selector_dict = None
@@ -1187,20 +1246,12 @@ class FeatureMixin:
             logger.debug(f"Push/Pull: GeometricFaceSelector konnte nicht erstellt werden: {selector_err}")
 
         # ShapeID für TNP (wenn verfügbar)
-        face_shape_id = None
-        try:
-            service = getattr(self.document, '_shape_naming_service', None)
-            if service is not None and hasattr(resolved_face, 'wrapped'):
-                face_shape_id = service.find_shape_id_by_shape(resolved_face.wrapped)
-        except Exception as sid_err:
-            logger.debug(f"Push/Pull: ShapeID-Lookup fehlgeschlagen: {sid_err}")
-
         # PushPullFeature erstellen
         feature = PushPullFeature(
             name=f"PushPull: {op_type.capitalize()} {distance:.1f}mm",
-            face_shape_id=face_shape_id,
+            face_shape_id=None,
             face_index=resolved_face_idx,
-            distance=height,  # Mit Vorzeichen für Push/Pull
+            distance=distance,
             direction=direction,
             operation=op_type.capitalize(),
             face_selector=face_selector_dict
@@ -1209,6 +1260,35 @@ class FeatureMixin:
         # Plane-Info speichern
         feature.plane_origin = center
         feature.plane_normal = normal
+
+        try:
+            if hasattr(self, '_find_or_register_face_shape_id'):
+                feature.face_shape_id = self._find_or_register_face_shape_id(
+                    body,
+                    resolved_face,
+                    local_index=0,
+                    feature_id=feature.id,
+                    force_feature_local=True,
+                )
+            else:
+                service = getattr(self.document, '_shape_naming_service', None)
+                if service is not None and hasattr(resolved_face, 'wrapped'):
+                    feature.face_shape_id = service.find_shape_id_by_shape(resolved_face.wrapped)
+        except Exception as sid_err:
+            logger.debug(f"Push/Pull: ShapeID-Lookup/Registrierung fehlgeschlagen: {sid_err}")
+
+        selection_face_id = face_data.get('selection_face_id') if is_dict else getattr(face_data, 'selection_face_id', None)
+        try:
+            if selection_face_id is not None and hasattr(self.viewport_3d, 'get_selection_context'):
+                selection_context = self.viewport_3d.get_selection_context(selection_face_id)
+                if selection_context is not None:
+                    feature.tnp_v5_selection_context = (
+                        selection_context.to_dict()
+                        if hasattr(selection_context, 'to_dict')
+                        else selection_context
+                    )
+        except Exception as ctx_err:
+            logger.debug(f"Push/Pull: SelectionContext konnte nicht gespeichert werden: {ctx_err}")
 
         # Feature zum Body hinzufügen
         cmd = AddFeatureCommand(

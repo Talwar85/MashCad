@@ -184,12 +184,21 @@ def _update_body_ui(main_window, body) -> None:
 
 
 def _remove_body_from_viewport(main_window, body_id: str) -> None:
-    try:
-        viewport = getattr(main_window, "viewport_3d", None)
-        if viewport is not None:
-            viewport.remove_body(body_id)
-    except Exception:
-        pass
+    viewport = getattr(main_window, "viewport_3d", None)
+    if viewport is None:
+        return
+
+    remove_body = getattr(viewport, "remove_body", None)
+    if callable(remove_body):
+        remove_body(body_id)
+        return
+
+    clear_bodies = getattr(viewport, "clear_bodies", None)
+    if callable(clear_bodies):
+        clear_bodies(only_body_id=body_id)
+        return
+
+    logger.warning(f"Viewport kann Body '{body_id}' nicht entfernen: remove_body/clear_bodies fehlen")
 
 
 def _all_document_bodies(document):

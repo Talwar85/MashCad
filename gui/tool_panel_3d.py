@@ -222,13 +222,21 @@ class ToolPanel3D(QWidget):
         ])
 
         # --- File ---
-        self._add_group(tr("File"), [
+        from config.feature_flags import is_enabled
+        file_buttons = [
             (tr("Import Mesh"), tr("Load STL, OBJ, PLY file\nSelect file in dialog\nMesh appears in viewport"), "import_mesh"),
             (tr("STL to CAD..."), tr("Convert STL to parametric CAD\nAnalyzes features, creates editable sketches\nReconstructs hole features automatically"), "stl_to_cad"),
             (tr("Convert Mesh to CAD"), tr("Convert mesh to parametric solid\nSelect: mesh body\nEnables CAD operations on imported meshes"), "convert_to_brep"),
+        ]
+        if is_enabled("print_orientation_optimizer"):
+            file_buttons.append(
+                (tr("Optimize for 3D Printing"), tr("Analyze and optimize print orientation\nSelect: body\nShows: best orientation, support estimate"), "optimize_print_orientation")
+            )
+        file_buttons += [
             (tr("Export STL..."), tr("Export body as STL for 3D printing\nSelect: body or export all\nChoose resolution in dialog"), "export_stl"),
             (tr("Export STEP..."), tr("Export as STEP for CAD exchange\nIndustry-standard format\nPreserves parametric data"), "export_step"),
-        ])
+        ]
+        self._add_group(tr("File"), file_buttons)
 
         # --- Advanced ---
         self._add_group("Advanced", [

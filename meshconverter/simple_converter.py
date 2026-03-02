@@ -67,6 +67,7 @@ from meshconverter.base import (
     ConversionPhase,
     ProgressUpdate
 )
+from modeling.ocp_thread_guard import ensure_ocp_main_thread
 
 
 class SimpleConverter(AsyncMeshConverter):
@@ -115,6 +116,8 @@ class SimpleConverter(AsyncMeshConverter):
         Returns:
             ConversionResult mit dem erstellten BREP Solid
         """
+        ensure_ocp_main_thread("convert mesh to BREP (SimpleConverter)")
+
         if not HAS_OCP:
             return ConversionResult(
                 success=False,

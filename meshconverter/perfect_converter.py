@@ -47,6 +47,7 @@ from meshconverter.base import (
     ConversionStatus,
     ConversionPhase
 )
+from modeling.ocp_thread_guard import ensure_ocp_main_thread
 from meshconverter.perfect.primitive_detector import (
     PrimitiveDetector,
     DetectedPrimitive,
@@ -134,6 +135,8 @@ class PerfectConverter(AsyncMeshConverter):
         Returns:
             ConversionResult mit dem erstellten BREP Solid
         """
+        ensure_ocp_main_thread("convert mesh to BREP (PerfectConverter)")
+
         if not HAS_OCP:
             return ConversionResult(
                 success=False,

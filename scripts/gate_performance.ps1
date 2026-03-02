@@ -1,4 +1,4 @@
-#!/usr/bin/env powershell
+﻿#!/usr/bin/env powershell
 # Performance-Gate Runner - QA-006
 # Usage: .\scripts\gate_performance.ps1
 # Exit Codes: 0 = PASS, 1 = FAIL (regressions detected)
@@ -31,20 +31,10 @@ $PerformanceTargets = @{
 
 # Regression threshold: 20% slower than target = regression
 $RegressionThreshold = 1.20
-
-function Test-PerformanceFeatureFlag {
-    <#
-    .SYNOPSIS
-    Check if performance_regression_gate feature flag is enabled
-    #>
-    $flagCheckScript = @'
-from config.feature_flags import is_enabled
-print("ENABLED" if is_enabled("performance_regression_gate") else "DISABLED")
-'@
-    
-    $result = conda run -n cad_env python -c $flagCheckScript 2>&1
-    return ($result -match "ENABLED")
-}
+Write-Host "=== Performance Gate Mode ===" -ForegroundColor Yellow
+Write-Host "Performance gate is always active" -ForegroundColor Green
+Write-Host ""
+$featureEnabled = $true
 
 function Invoke-PerformanceBenchmarks {
     <#
@@ -141,17 +131,6 @@ function Parse-BenchmarkOutput {
 
 # Main execution
 # ==============
-
-Write-Host "=== Checking Feature Flag ===" -ForegroundColor Yellow
-$featureEnabled = Test-PerformanceFeatureFlag
-
-if (-not $featureEnabled) {
-    Write-Host "WARNING: performance_regression_gate feature flag is DISABLED" -ForegroundColor Yellow
-    Write-Host "         Performance gate will run but results are informational only" -ForegroundColor Yellow
-}
-else {
-    Write-Host "Feature flag: ENABLED" -ForegroundColor Green
-}
 Write-Host ""
 
 if ($DryRun) {

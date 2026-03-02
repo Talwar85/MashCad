@@ -27,11 +27,11 @@ class BodyResolveMixin:
 
     def _resolve_path(self, path_data: dict, current_solid, feature: Optional['SweepFeature'] = None):
         """
-        LÃ¶st Pfad-Daten zu Build123d Wire auf.
+        Löst Pfad-Daten zu Build123d Wire auf.
 
         Args:
             path_data: Dict mit edge_indices, sketch_id, etc.
-            current_solid: Aktueller Solid fÃ¼r Body-Edge-AuflÃ¶sung
+            current_solid: Aktueller Solid für Body-Edge-Auflösung
 
         Returns:
             Build123d Wire oder None
@@ -94,7 +94,7 @@ class BodyResolveMixin:
                             if resolved is not None:
                                 resolved_index_edges.append(resolved)
                     except Exception as e:
-                        logger.debug(f"Sweep: Topology-Index-PfadauflÃ¶sung fehlgeschlagen: {e}")
+                        logger.debug(f"Sweep: Topology-Index-Pfadauflösung fehlgeschlagen: {e}")
 
                 resolved_shape_edge = None
                 path_shape_resolution_method = ""
@@ -113,9 +113,9 @@ class BodyResolveMixin:
                             if resolved_shape_edge is None:
                                 resolved_shape_edge = Edge(resolved_ocp)
                             if is_enabled("tnp_debug_logging"):
-                                logger.debug(f"Sweep: Path via ShapeID aufgelÃ¶st (method={method})")
+                                logger.debug(f"Sweep: Path via ShapeID aufgelöst (method={method})")
                     except Exception as e:
-                        logger.debug(f"Sweep: Path-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
+                        logger.debug(f"Sweep: Path-ShapeID Auflösung fehlgeschlagen: {e}")
 
                 strict_path_mismatch = False
                 single_path_ref_pair = bool(
@@ -194,10 +194,10 @@ class BodyResolveMixin:
                 if resolved_shape_edge is not None:
                     return Wire([resolved_shape_edge])
 
-                # Wenn explizite TNP-Referenzen vorhanden sind, kein stilles Recovery Ã¼ber Legacy/Session-Pfade.
+                # Wenn explizite TNP-Referenzen vorhanden sind, kein stilles Recovery über Legacy/Session-Pfade.
                 if has_topological_path_refs:
                     logger.warning(
-                        "Sweep: TNP-Pfadreferenz konnte nicht aufgelÃ¶st werden "
+                        "Sweep: TNP-Pfadreferenz konnte nicht aufgelöst werden "
                         "(ShapeID/edge_indices). Kein Geometric-Fallback."
                     )
                     self._record_tnp_failure(
@@ -230,14 +230,14 @@ class BodyResolveMixin:
                     except Exception as e:
                         logger.debug(f"Sweep: GeometricEdgeSelector Fallback fehlgeschlagen: {e}")
 
-                # SekundÃ¤r: Direkte Build123d Edges (Session-basiert)
+                # Sekundär: Direkte Build123d Edges (Session-basiert)
                 build123d_edges = path_data.get('build123d_edges', [])
                 if build123d_edges:
                     _persist_path_shape_id(build123d_edges[0])
                     logger.debug(f"Sweep: Verwende {len(build123d_edges)} direkte Build123d Edge(s)")
                     return Wire(build123d_edges)
 
-                # SekundÃ¤r: Direkte Einzel-Edge (Session-basiert)
+                # Sekundär: Direkte Einzel-Edge (Session-basiert)
                 direct_edge = path_data.get('edge')
                 if direct_edge is not None:
                     _persist_path_shape_id(direct_edge)
@@ -245,21 +245,21 @@ class BodyResolveMixin:
 
                 if path_data.get("edge_selector") is not None:
                     logger.warning(
-                        "Sweep: Legacy path_data.edge_selector wird nicht mehr aufgelÃ¶st. "
-                        "Bitte Pfad neu auswÃ¤hlen (TNP v4: edge_indices/ShapeID)."
+                        "Sweep: Legacy path_data.edge_selector wird nicht mehr aufgelöst. "
+                        "Bitte Pfad neu auswählen (TNP v4: edge_indices/ShapeID)."
                     )
 
             return None
 
         except Exception as e:
-            logger.debug(f"Pfad-AuflÃ¶sung fehlgeschlagen: {e}")
+            logger.debug(f"Pfad-Auflösung fehlgeschlagen: {e}")
             return None
 
     def _sketch_edge_to_wire(self, path_data: dict):
         """
         Konvertiert Sketch-Edge zu Build123d Wire.
 
-        UnterstÃ¼tzte Typen:
+        Unterstützte Typen:
         - arc: Bogen mit center, radius, start_angle, end_angle
         - line: Linie mit start, end
         - spline: Spline mit control_points
@@ -387,11 +387,11 @@ class BodyResolveMixin:
             selector_center = np.array(geo_selector.center)
             dist = np.linalg.norm(face_center - selector_center)
             
-            # Normalisierter Distanz-Score (1.0 = gleich, 0.0 = auÃŸerhalb Toleranz)
+            # Normalisierter Distanz-Score (1.0 = gleich, 0.0 = außerhalb Toleranz)
             tolerance = getattr(geo_selector, 'tolerance', 10.0)
             center_score = max(0.0, 1.0 - (dist / tolerance))
             
-            # Normalen-Ã„hnlichkeit
+            # Normalen-Ähnlichkeit
             try:
                 fn = face.normal_at(fc)
                 face_normal = np.array([fn.X, fn.Y, fn.Z])
@@ -402,13 +402,13 @@ class BodyResolveMixin:
                 selector_normal = selector_normal / (np.linalg.norm(selector_normal) + 1e-10)
                 
                 # Dot-Product (1.0 = gleiche Richtung, -1.0 = entgegengesetzt)
-                dot = abs(np.dot(face_normal, selector_normal))  # Abs fÃ¼r beide Richtungen
+                dot = abs(np.dot(face_normal, selector_normal))  # Abs für beide Richtungen
                 normal_score = dot
             except Exception as e:
                 logger.debug(f"[__init__.py] Fehler: {e}")
                 normal_score = 0.5  # Neutral wenn Normal nicht berechenbar
             
-            # Area-Ã„hnlichkeit (20% Toleranz)
+            # Area-Ähnlichkeit (20% Toleranz)
             try:
                 face_area = face.area
                 selector_area = geo_selector.area
@@ -435,7 +435,7 @@ class BodyResolveMixin:
 
     def _resolve_feature_faces(self, feature, solid):
         """
-        TNP v4.0: LÃ¶st Face-Referenzen eines Features auf und migriert Legacy-Daten.
+        TNP v4.0: Löst Face-Referenzen eines Features auf und migriert Legacy-Daten.
 
         Reihenfolge:
         1. ShapeIDs via ShapeNamingService
@@ -464,7 +464,7 @@ class BodyResolveMixin:
             index_attr = "face_indices"
             selector_attr = "opening_face_selectors"
         elif isinstance(feature, (ThreadFeature, ExtrudeFeature)):
-            # Thread/Push-Pull nutzen singulÃ¤re Face-Referenzen.
+            # Thread/Push-Pull nutzen singuläre Face-Referenzen.
             shape_attr = None
             index_attr = None
             selector_attr = None
@@ -584,7 +584,7 @@ class BodyResolveMixin:
                     resolved_face = face_from_index(solid, face_idx)
                     _append_face(resolved_face, topo_index=face_idx, source="index")
             except Exception as e:
-                logger.debug(f"{feature.name}: Face-Index AuflÃ¶sung fehlgeschlagen: {e}")
+                logger.debug(f"{feature.name}: Face-Index Auflösung fehlgeschlagen: {e}")
 
         def _resolve_by_shape_ids() -> None:
             if not service:
@@ -613,11 +613,11 @@ class BodyResolveMixin:
                     )
                     if is_enabled("tnp_debug_logging"):
                         logger.debug(
-                            f"{feature.name}: Face via ShapeID aufgelÃ¶st "
+                            f"{feature.name}: Face via ShapeID aufgelöst "
                             f"(method={method})"
                         )
                 except Exception as e:
-                    logger.debug(f"{feature.name}: Face-ShapeID AuflÃ¶sung fehlgeschlagen: {e}")
+                    logger.debug(f"{feature.name}: Face-ShapeID Auflösung fehlgeschlagen: {e}")
 
         expected_shape_refs = sum(1 for sid in shape_ids if hasattr(sid, "uuid"))
         single_ref_pair = bool(
@@ -648,8 +648,8 @@ class BodyResolveMixin:
         )
 
         # TNP v4.0:
-        # - Extrude/Thread (single-face): shape-first fÃ¼r semantische StabilitÃ¤t.
-        # - Alle anderen: index-first, um Topologie-Indizes als PrimÃ¤rreferenz zu nutzen.
+        # - Extrude/Thread (single-face): shape-first für semantische Stabilität.
+        # - Alle anderen: index-first, um Topologie-Indizes als Primärreferenz zu nutzen.
         if prefer_shape_first:
             _resolve_by_shape_ids()
             if strict_dual_face_refs or (len(resolved_shape_ids) < expected_shape_refs and valid_face_indices):
@@ -755,8 +755,8 @@ class BodyResolveMixin:
         )
         if strict_dual_face_refs and strict_topology_mismatch:
             unresolved_topology_refs = True
-        # Strict fÃ¼r single-face Referenzen: wenn ShapeID vorhanden aber nicht
-        # auflÃ¶sbar, nicht still auf potentiell falschen Index degradieren.
+        # Strict für single-face Referenzen: wenn ShapeID vorhanden aber nicht
+        # auflösbar, nicht still auf potentiell falschen Index degradieren.
         if (
             prefer_shape_first
             and expected_shape_refs > 0
@@ -768,7 +768,7 @@ class BodyResolveMixin:
         if has_topological_refs and unresolved_topology_refs:
             mismatch_hint = " (ShapeID/Index-Mismatch)" if strict_topology_mismatch else ""
             logger.warning(
-                f"{feature.name}: Face-Referenz ist ungÃ¼ltig (ShapeID/face_indices). "
+                f"{feature.name}: Face-Referenz ist ungültig (ShapeID/face_indices). "
                 f"Kein Geometric-Fallback.{mismatch_hint}"
             )
             self._record_tnp_failure(
@@ -884,13 +884,13 @@ class BodyResolveMixin:
             if canonical_shape_ids:
                 resolved_shape_ids = canonical_shape_ids
 
-        # Persistiere aktualisierte Referenzen zurÃ¼ck ins Feature
+        # Persistiere aktualisierte Referenzen zurück ins Feature
         try:
             updated_selectors = [
                 GeometricFaceSelector.from_face(face).to_dict()
                 for face in resolved_faces
             ]
-            # Nicht-topologische Zusatzdaten (z. B. cell_ids fÃ¼rs Overlay) beibehalten.
+            # Nicht-topologische Zusatzdaten (z. B. cell_ids fürs Overlay) beibehalten.
             for idx, updated in enumerate(updated_selectors):
                 if idx >= len(selectors):
                     continue
@@ -924,9 +924,9 @@ class BodyResolveMixin:
     def _resolve_faces_for_shell(self, solid, face_selectors: List[dict],
                                 feature: 'ShellFeature' = None):
         """
-        LÃ¶st Face-Selektoren fÃ¼r Shell-Operation auf.
+        Löst Face-Selektoren für Shell-Operation auf.
         
-        Verwendet TNP v4.0 wenn ShapeNamingService verfÃ¼gbar.
+        Verwendet TNP v4.0 wenn ShapeNamingService verfügbar.
         """
         if solid is None or not face_selectors:
             return []
@@ -987,16 +987,16 @@ class BodyResolveMixin:
 
     def _resolve_edges_tnp(self, solid, feature) -> List:
         """
-        TNP v4.1 Edge-AuflÃ¶sung mit History-First Strategie.
+        TNP v4.1 Edge-Auflösung mit History-First Strategie.
 
         Reihenfolge (STRICT):
         1. OperationRecord-Mappings (History-basiert)
-        2. edge_shape_ids mit direkter AuflÃ¶sung
+        2. edge_shape_ids mit direkter Auflösung
         3. edge_indices (Topology-Index)
         4. geometric_selectors (NUR LETZTE OPTION)
 
         WICHTIG: Wenn History-First versagt und keine andere Methode funktioniert,
-        soll das Feature fehlschlagen statt auf Geometric-Fallback zurÃ¼ckzufallen.
+        soll das Feature fehlschlagen statt auf Geometric-Fallback zurückzufallen.
         """
         # Import here to avoid circular imports
         from modeling.features.fillet_chamfer import FilletFeature, ChamferFeature
@@ -1033,7 +1033,7 @@ class BodyResolveMixin:
             service = self._document._shape_naming_service
 
         resolved_edges = []
-        unresolved_shape_ids = []  # FÃ¼r Debug-Visualisierung
+        unresolved_shape_ids = []  # Für Debug-Visualisierung
         resolved_shape_ids = []
         resolved_edge_indices = []
         resolved_edges_from_shape = []
@@ -1089,7 +1089,7 @@ class BodyResolveMixin:
             resolved_count = 0
             for op in service._operations:
                 if op.manual_mappings and op.feature_id == getattr(feature, 'id', ''):
-                    # PrÃ¼fe ob ShapeIDs in den Mappings vorhanden sind
+                    # Prüfe ob ShapeIDs in den Mappings vorhanden sind
                     for input_uuid, output_uuids in op.manual_mappings.items():
                         # Input-ShapeID finden
                         for shape_id in edge_shape_ids:
@@ -1107,8 +1107,8 @@ class BodyResolveMixin:
                                                 resolved_count += 1
                                                 if is_enabled("tnp_debug_logging"):
                                                     logger.debug(
-                                                        f"TNP v4.1: Edge via OperationRecord-Mapping aufgelÃ¶st: "
-                                                        f"{input_uuid[:8]} â†’ {output_uuid[:8]}"
+                                                        f"TNP v4.1: Edge via OperationRecord-Mapping aufgelöst: "
+                                                        f"{input_uuid[:8]} →’ {output_uuid[:8]}"
                                                     )
             return resolved_count
 
@@ -1133,7 +1133,7 @@ class BodyResolveMixin:
                     if resolved_ocp is None:
                         unresolved_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
-                            logger.warning(f"TNP v4.0: Edge {i} konnte via ShapeID nicht aufgelÃ¶st werden")
+                            logger.warning(f"TNP v4.0: Edge {i} konnte via ShapeID nicht aufgelöst werden")
                         continue
 
                     matching_edge = self._find_matching_edge_in_solid(resolved_ocp, all_edges)
@@ -1182,15 +1182,15 @@ class BodyResolveMixin:
                         
                         _append_unique(matching_edge, shape_id=shape_id, source="shape")
                         if is_enabled("tnp_debug_logging"):
-                            logger.debug(f"TNP v4.0: Edge {i} via ShapeID aufgelÃ¶st (method={method})")
+                            logger.debug(f"TNP v4.0: Edge {i} via ShapeID aufgelöst (method={method})")
                     else:
                         unresolved_shape_ids.append(shape_id)
                         if is_enabled("tnp_debug_logging"):
-                            logger.warning(f"TNP v4.0: Keine passende Solid-Edge fÃ¼r ShapeID-Edge {i}")
+                            logger.warning(f"TNP v4.0: Keine passende Solid-Edge für ShapeID-Edge {i}")
                 except Exception as e:
                     unresolved_shape_ids.append(shape_id)
                     if is_enabled("tnp_debug_logging"):
-                        logger.warning(f"TNP v4.0: Edge {i} ShapeID-AuflÃ¶sung fehlgeschlagen: {e}")
+                        logger.warning(f"TNP v4.0: Edge {i} ShapeID-Auflösung fehlgeschlagen: {e}")
 
         def _resolve_by_indices() -> None:
             if not valid_edge_indices:
@@ -1203,7 +1203,7 @@ class BodyResolveMixin:
                     _append_unique(resolved, topo_index=edge_idx, source="index")
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v4.0: Index-AuflÃ¶sung fehlgeschlagen: {e}")
+                    logger.debug(f"TNP v4.0: Index-Auflösung fehlgeschlagen: {e}")
 
         # Main resolution logic
         expected_shape_refs = sum(1 for sid in edge_shape_ids if hasattr(sid, "uuid"))
@@ -1211,7 +1211,7 @@ class BodyResolveMixin:
         # TNP v4.1: History-First Strategie
         op_resolved = _resolve_by_operation_records()
         if op_resolved > 0 and is_enabled("tnp_debug_logging"):
-            logger.debug(f"TNP v4.1: {op_resolved} Edges via OperationRecords aufgelÃ¶st")
+            logger.debug(f"TNP v4.1: {op_resolved} Edges via OperationRecords aufgelöst")
 
         # Then ShapeIDs
         if op_resolved < len(edge_shape_ids):
@@ -1279,7 +1279,7 @@ class BodyResolveMixin:
                         selector_recovery_used = True
             except Exception as e:
                 if is_enabled("tnp_debug_logging"):
-                    logger.debug(f"TNP v4.0: GeometricEdgeSelector-AuflÃ¶sung fehlgeschlagen: {e}")
+                    logger.debug(f"TNP v4.0: GeometricEdgeSelector-Auflösung fehlgeschlagen: {e}")
 
             # Record drift when selector recovery was used
             if selector_recovery_used and not strict_policy:
@@ -1340,9 +1340,9 @@ class BodyResolveMixin:
             if total_refs == 0:
                 logger.warning("TNP v4.0: Feature hat keine Edge-Referenzen")
             elif found >= total_refs:
-                logger.debug(f"TNP v4.0: {found}/{total_refs} Edges aufgelÃ¶st")
+                logger.debug(f"TNP v4.0: {found}/{total_refs} Edges aufgelöst")
             else:
-                logger.warning(f"TNP v4.0: Nur {found}/{total_refs} Edges aufgelÃ¶st")
+                logger.warning(f"TNP v4.0: Nur {found}/{total_refs} Edges aufgelöst")
         
         # Debug visualization data
         self._last_tnp_debug_data = {
@@ -1351,7 +1351,7 @@ class BodyResolveMixin:
             'body_id': self.id
         }
         
-        # Callback fÃ¼r GUI-Visualisierung (wenn registriert)
+        # Callback für GUI-Visualisierung (wenn registriert)
         if hasattr(self._document, '_tnp_debug_callback') and self._document._tnp_debug_callback:
             try:
                 self._document._tnp_debug_callback(resolved_edges, unresolved_shape_ids, self.id)
@@ -1384,13 +1384,13 @@ class BodyResolveMixin:
         """
         Findet die passende Edge vom aktuellen Solid.
         
-        OCP erwartet Edges die tatsÃ¤chlich im aktuellen Solid's BRep-Graph existieren,
+        OCP erwartet Edges die tatsächlich im aktuellen Solid's BRep-Graph existieren,
         nicht Edges aus einem anderen Kontext (auch wenn sie geometrisch identisch sind).
         
         Args:
-            resolved_ocp_edge: Die aufgelÃ¶ste OCP Edge (aus ShapeNamingService)
+            resolved_ocp_edge: Die aufgelöste OCP Edge (aus ShapeNamingService)
             all_edges: Liste aller Edges vom aktuellen Solid
-            tolerance: Toleranz fÃ¼r geometrischen Vergleich
+            tolerance: Toleranz für geometrischen Vergleich
             
         Returns:
             Die passende Edge aus all_edges, oder None
@@ -1411,7 +1411,7 @@ class BodyResolveMixin:
                         f"_find_matching_edge_in_solid: ShapeType-Pruefung uebersprungen ({shape_type_err})"
                     )
             
-            # Center der aufgelÃ¶sten Edge
+            # Center der aufgelösten Edge
             resolved_b3d = Edge(wrapped)
             resolved_center = np.array([
                 resolved_b3d.center().X, 
@@ -1444,10 +1444,10 @@ class BodyResolveMixin:
     @staticmethod
     def _is_same_edge(edge_a, edge_b) -> bool:
         """
-        Robuster Edge-Vergleich fÃ¼r TNP-Pfade.
+        Robuster Edge-Vergleich für TNP-Pfade.
 
-        Bevorzugt OCP IsSame (Topologie-identisch), fÃ¤llt auf eine leichte
-        Geometrie-PrÃ¼fung und zuletzt ObjektidentitÃ¤t zurÃ¼ck.
+        Bevorzugt OCP IsSame (Topologie-identisch), fällt auf eine leichte
+        Geometrie-Prüfung und zuletzt Objektidentität zurück.
         """
         if edge_a is None or edge_b is None:
             return False

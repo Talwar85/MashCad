@@ -144,7 +144,8 @@ def brepfeat_prism(
     height: float,
     fuse: bool = True,
     unify: bool = True,
-    sketch_face: 'TopoDS_Face' = None
+    sketch_face: 'TopoDS_Face' = None,
+    preferred_direction: Optional[Tuple[float, float, float]] = None,
 ) -> Optional['Solid']:
     """
     Extrudiert eine Face mit BRepFeat_MakePrism (lokale Operation).
@@ -162,6 +163,10 @@ def brepfeat_prism(
         unify: UnifySameDomain anwenden
         sketch_face: Face des Base-Solids auf der das Profil liegt.
                      Wenn None, wird automatisch gesucht.
+        preferred_direction: Bevorzugte Extrusionsrichtung aus der
+                     Benutzerselektion (z. B. Face-Normale am Pickpunkt).
+                     Wenn gesetzt, wird diese Richtung statt der internen
+                     Flächenparametrisierung verwendet.
 
     Returns:
         Neues Solid oder None bei Fehler
@@ -173,7 +178,10 @@ def brepfeat_prism(
         from OCP.BRepAdaptor import BRepAdaptor_Surface
         from OCP.gp import gp_Pnt
 
-        # Face-Normal korrekt berechnen via Kreuzprodukt der Tangenten
+        # Face-Normal via Flächenparametrisierung berechnen.
+        # Diese Richtung ist für manche Faces (z. B. Box-Unterseite) nicht
+        # identisch mit der vom Benutzer gewählten Pull-Richtung, daher kann
+        # optional eine bevorzugte Selektionsrichtung übergeben werden.
         adaptor = BRepAdaptor_Surface(face)
         u_mid = (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2
         v_mid = (adaptor.FirstVParameter() + adaptor.LastVParameter()) / 2
@@ -198,6 +206,14 @@ def brepfeat_prism(
             normal = gp_Dir(normal_vec)
 
         direction = gp_Dir(normal.X(), normal.Y(), normal.Z())
+        if preferred_direction is not None:
+            try:
+                px, py, pz = (float(preferred_direction[0]), float(preferred_direction[1]), float(preferred_direction[2]))
+                magnitude = math.sqrt(px * px + py * py + pz * pz)
+                if magnitude > 1e-9:
+                    direction = gp_Dir(px / magnitude, py / magnitude, pz / magnitude)
+            except Exception as preferred_err:
+                logger.debug(f"BRepFeat_MakePrism: Preferred direction ignoriert: {preferred_err}")
         fuse_mode = 1 if fuse else 0
         abs_height = abs(height)
 
@@ -212,7 +228,10 @@ def brepfeat_prism(
                 sketch_face = face
                 logger.debug("BRepFeat_MakePrism: Sketch-Face nicht auf Solid gefunden, nutze Profil-Face")
 
-        logger.debug(f"BRepFeat_MakePrism: fuse={fuse}, height={abs_height:.2f}")
+        logger.debug(
+            f"BRepFeat_MakePrism: fuse={fuse}, height={abs_height:.2f}, "
+            f"dir=({direction.X():.3f},{direction.Y():.3f},{direction.Z():.3f})"
+        )
 
         prism = BRepFeat_MakePrism()
         prism.Init(

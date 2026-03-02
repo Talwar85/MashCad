@@ -14,14 +14,42 @@ during package initialization.
 
 import sys
 import pytest
-from typing import List, Tuple
+from typing import List
+
+
+_CACHE_PREFIXES = ("modeling", "gui", "sketcher", "config", "meshconverter")
+
+
+def _is_prefixed_module(name: str, prefixes: List[str] | tuple[str, ...]) -> bool:
+    """Match exact package name or submodule path (avoid false positives like modelingx)."""
+    return any(name == p or name.startswith(f"{p}.") for p in prefixes)
 
 
 def _clear_module_cache(prefixes: List[str]):
     """Remove cached modules matching any prefix to force fresh import."""
     for mod in list(sys.modules.keys()):
-        if any(mod.startswith(p) for p in prefixes):
+        if _is_prefixed_module(mod, prefixes):
             del sys.modules[mod]
+
+
+@pytest.fixture(autouse=True)
+def _restore_module_cache_after_test():
+    """
+    Keep import-regression tests isolated.
+
+    These tests intentionally mutate ``sys.modules``. Without restoration, later
+    tests in the same worker see mixed module singletons and fail nondeterministically.
+    """
+    saved = {
+        name: module
+        for name, module in sys.modules.items()
+        if _is_prefixed_module(name, _CACHE_PREFIXES)
+    }
+    yield
+    for name in list(sys.modules.keys()):
+        if _is_prefixed_module(name, _CACHE_PREFIXES):
+            del sys.modules[name]
+    sys.modules.update(saved)
 
 
 class TestModelingImports:

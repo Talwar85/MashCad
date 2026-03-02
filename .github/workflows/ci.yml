@@ -28,13 +28,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Setup Miniconda (Windows)
+    - name: Set up Python (Windows)
       if: runner.os == 'Windows'
-      uses: conda-incubator/setup-miniconda@v3
+      uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-        miniforge-version: latest
+
+    - name: Setup Miniconda (Windows)
+      if: runner.os == 'Windows'
+      uses: conda-incubator/setup-miniconda@v2
+      with:
         activate-environment: cad_env
+        python-version: '3.11'
         auto-activate-base: false
 
     - name: Setup Miniconda (Linux)
@@ -43,8 +48,8 @@ jobs:
       with:
         python-version: '3.11'
         miniforge-version: latest
-        activate-environment: cad_env
-        auto-activate-base: false
+        activate-environment: base
+        auto-activate: false
 
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
@@ -56,11 +61,43 @@ jobs:
           libxcb-render-util0 libxcb-shape0 libdbus-1-3 \
           libgl1-mesa-glx libgl1-mesa-dev libegl1-mesa
 
-    - name: Install Python dependencies
+    - name: Install Python dependencies (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        conda install -n cad_env -c conda-forge -y `
+          pytest `
+          pytest-xdist `
+          pytest-timeout `
+          pyside6 `
+          build123d `
+          ocp `
+          vtk `
+          pyvista `
+          pyvistaqt `
+          numpy `
+          scipy `
+          scikit-learn `
+          casadi `
+          shapely `
+          rtree `
+          ezdxf `
+          loguru `
+          trimesh `
+          matplotlib `
+          pillow `
+          lib3mf
+        conda run -n cad_env python -m pip install ocp-tessellate
+
+    - name: Install Python dependencies (Linux)
+      if: runner.os == 'Linux'
       shell: bash -el {0}
       run: |
-        conda install -c conda-forge -y \
+        conda create -y -n cad_env python=3.11
+        conda install -n cad_env -c conda-forge -y \
           pytest \
+          pytest-xdist \
+          pytest-timeout \
           pyside6 \
           build123d \
           ocp \
@@ -69,22 +106,37 @@ jobs:
           pyvistaqt \
           numpy \
           scipy \
+          scikit-learn \
+          casadi \
           shapely \
+          rtree \
           ezdxf \
           loguru \
           trimesh \
           matplotlib \
           pillow \
           lib3mf
-        pip install ocp-tessellate
+        conda run -n cad_env pip install ocp-tessellate
 
-    - name: Verify environment
+    - name: Verify environment (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        conda run -n cad_env python --version
+        conda run -n cad_env python -m pytest --version
+        conda run -n cad_env python -c "import build123d; print('build123d OK')"
+        conda run -n cad_env python -c "import OCP; print('OCP OK')"
+        conda run -n cad_env python -c "import rtree; print('rtree OK')"
+
+    - name: Verify environment (Linux)
+      if: runner.os == 'Linux'
       shell: bash -el {0}
       run: |
-        python --version
-        python -m pytest --version
-        python -c "import build123d; print('build123d OK')"
-        python -c "import OCP; print('OCP OK')"
+        conda run -n cad_env python --version
+        conda run -n cad_env python -m pytest --version
+        conda run -n cad_env python -c "import build123d; print('build123d OK')"
+        conda run -n cad_env python -c "import OCP; print('OCP OK')"
+        conda run -n cad_env python -c "import rtree; print('rtree OK')"
 
     - name: Run Core-Gate (Windows)
       if: runner.os == 'Windows'
@@ -124,12 +176,27 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Set up Python (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
     - name: Setup Miniconda
       uses: conda-incubator/setup-miniconda@v3
+      if: runner.os == 'Linux'
       with:
         python-version: '3.11'
         miniforge-version: latest
+        activate-environment: base
+        auto-activate: false
+
+    - name: Set up Conda (Windows)
+      if: runner.os == 'Windows'
+      uses: conda-incubator/setup-miniconda@v2
+      with:
         activate-environment: cad_env
+        python-version: '3.11'
         auto-activate-base: false
 
     - name: Install system dependencies (Linux)
@@ -145,10 +212,40 @@ jobs:
           libxrender1 libxi6 libxrandr2 libxcursor1 libxcomposite1 \
           libfontconfig1 libfreetype6 xvfb
 
-    - name: Install Python dependencies
+    - name: Install Python dependencies (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        conda install -n cad_env -c conda-forge -y `
+          pytest `
+          pytest-timeout `
+          pytest-qt `
+          pyside6 `
+          build123d `
+          ocp `
+          vtk `
+          pyvista `
+          pyvistaqt `
+          numpy `
+          scipy `
+          scikit-learn `
+          casadi `
+          shapely `
+          rtree `
+          ezdxf `
+          loguru `
+          trimesh `
+          matplotlib `
+          pillow `
+          lib3mf
+        conda run -n cad_env python -m pip install ocp-tessellate
+
+    - name: Install Python dependencies (Linux)
+      if: runner.os == 'Linux'
       shell: bash -el {0}
       run: |
-        conda install -c conda-forge -y \
+        conda create -y -n cad_env python=3.11
+        conda install -n cad_env -c conda-forge -y \
           pytest pytest-qt \
           pyside6 \
           build123d \
@@ -158,14 +255,17 @@ jobs:
           pyvistaqt \
           numpy \
           scipy \
+          scikit-learn \
+          casadi \
           shapely \
+          rtree \
           ezdxf \
           loguru \
           trimesh \
           matplotlib \
           pillow \
           lib3mf
-        pip install ocp-tessellate
+        conda run -n cad_env pip install ocp-tessellate
 
     - name: Run UI-Gate (Windows)
       if: runner.os == 'Windows'
@@ -236,19 +336,43 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Setup Miniconda
-      uses: conda-incubator/setup-miniconda@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-        miniforge-version: latest
+
+    - name: Setup Miniconda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
         activate-environment: cad_env
+        python-version: '3.11'
         auto-activate-base: false
 
     - name: Install dependencies
-      shell: bash -el {0}
+      shell: pwsh
       run: |
-        conda install -c conda-forge -y pytest
-        pip install -r requirements.txt
+        conda install -n cad_env -c conda-forge -y `
+          pytest `
+          pytest-timeout `
+          pyside6 `
+          build123d `
+          ocp `
+          vtk `
+          pyvista `
+          pyvistaqt `
+          numpy `
+          scipy `
+          scikit-learn `
+          casadi `
+          shapely `
+          rtree `
+          ezdxf `
+          loguru `
+          trimesh `
+          matplotlib `
+          pillow `
+          lib3mf
+        conda run -n cad_env python -m pip install ocp-tessellate
 
     - name: Generate Gate Evidence
       shell: pwsh
@@ -274,6 +398,7 @@ jobs:
 
     steps:
     - name: Generate Summary
+      shell: pwsh
       run: |
         echo "## Cross-Platform CI Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY

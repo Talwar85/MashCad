@@ -2,10 +2,10 @@
 MashCAD - Background Workers
 ============================
 
-QThread-basierte Worker für langdauernde Operationen.
+Queued main-thread worker für OCP-abhängige Langläufer.
 
-PERFORMANCE (Phase 6): UI bleibt responsiv während Export/Import.
-PERFORMANCE (Phase 9): Background Tessellation für flüssige UI.
+PERFORMANCE (Phase 6): UI bleibt responsiv soweit Progress-Callbacks yielden.
+PERFORMANCE (Phase 9): Deferred tessellation für flüssigere UI ohne OCP-Threads.
 """
 
 from gui.workers.export_worker import STLExportWorker, STEPExportWorker

@@ -693,7 +693,7 @@ class InteractiveTutorialPanel(QFrame):
         layout.addLayout(progress_layout)
         
         # Skip Button
-        skip_btn = QPushButton("Tutorial überspringen")
+        skip_btn = QPushButton(tr("Skip Tutorial"))
         skip_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;

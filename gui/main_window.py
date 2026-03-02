@@ -9,6 +9,7 @@ and mixin inheritance. All functionality is in mixin modules.
 import sys
 import os
 from loguru import logger
+from i18n import tr
 
 from PySide6.QtWidgets import QApplication, QMainWindow
 from PySide6.QtCore import Qt
@@ -68,7 +69,7 @@ class MainWindow(
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MashCAD")
+        self.setWindowTitle(tr("MashCAD"))
         self.setMinimumSize(1400, 900)
 
         # Window Icon setzen
@@ -86,7 +87,6 @@ class MainWindow(
         
         # Initialize document
         from modeling import Document
-        from i18n import tr
         self.document = Document("Projekt1")
         self._current_project_path = None
         
@@ -151,11 +151,11 @@ class MainWindow(
     def _init_preview_system(self):
         """Initialize the live preview system."""
         from PySide6.QtCore import QTimer
-        from config.feature_flags import FEATURE_FLAGS
+        from config.feature_flags import get_setting
         
         self._preview_timers = {}
         self._preview_configs = {}
-        self._preview_debounce_ms = FEATURE_FLAGS.get("preview_debounce_ms", 150)
+        self._preview_debounce_ms = get_setting("preview_debounce_ms", 150)
         
         # Initialize preview timers for each feature type
         for feature_type in ['texture', 'pattern', 'shell', 'fillet', 'chamfer']:
@@ -187,8 +187,6 @@ class MainWindow(
 
     def _execute_live_preview(self, feature_type: str):
         """Execute debounced live preview for a feature type."""
-        from config.feature_flags import is_enabled
-        
         config = self._preview_configs.get(feature_type)
         if not config:
             return
@@ -199,14 +197,11 @@ class MainWindow(
             elif feature_type == 'pattern':
                 self._execute_pattern_live_preview(config)
             elif feature_type == 'shell':
-                if is_enabled("live_preview_shell"):
-                    self._execute_shell_live_preview(config)
+                self._execute_shell_live_preview(config)
             elif feature_type == 'fillet':
-                if is_enabled("live_preview_fillet"):
-                    self._execute_fillet_live_preview(config)
+                self._execute_fillet_live_preview(config)
             elif feature_type == 'chamfer':
-                if is_enabled("live_preview_chamfer"):
-                    self._execute_chamfer_live_preview(config)
+                self._execute_chamfer_live_preview(config)
         except Exception as e:
             logger.debug(f"Live preview error for {feature_type}: {e}")
     
@@ -268,12 +263,6 @@ class MainWindow(
     
     def _request_live_preview(self, feature_type: str, config: dict):
         """Request a live preview with debouncing."""
-        from config.feature_flags import is_enabled
-        
-        flag_name = f"live_preview_{feature_type}"
-        if not is_enabled(flag_name):
-            return
-        
         self._preview_configs[feature_type] = config
         self._preview_timers[feature_type].start(self._preview_debounce_ms)
     
@@ -282,6 +271,24 @@ class MainWindow(
         if feature_type in self._preview_timers:
             self._preview_timers[feature_type].stop()
         self._preview_configs[feature_type] = None
+
+        viewport = getattr(self, "viewport_3d", None)
+        if viewport is None:
+            return
+
+        clear_method_name = {
+            "shell": "_clear_shell_preview",
+            "fillet": "_clear_fillet_preview",
+            "chamfer": "_clear_chamfer_preview",
+        }.get(feature_type)
+
+        clear_method = getattr(viewport, clear_method_name, None) if clear_method_name else None
+        if callable(clear_method):
+            clear_method()
+        else:
+            clear_all = getattr(viewport, "clear_all_feature_previews", None)
+            if callable(clear_all):
+                clear_all()
     
     def _cleanup_notification(self, notif):
         """Cleanup notification."""

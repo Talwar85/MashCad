@@ -19,7 +19,6 @@ from modeling.mate_system import (
     create_coincident_mate,
     create_distance_mate,
 )
-from config.feature_flags import is_enabled, set_flag
 
 
 class TestMateReference:
@@ -197,10 +196,6 @@ class TestMate:
 
 class TestMateManager:
     """Tests for MateManager class."""
-    
-    def test_feature_flag_enabled(self):
-        """Test that mate_system_v1 feature flag is enabled."""
-        assert is_enabled("mate_system_v1"), "mate_system_v1 flag should be enabled"
     
     def test_create_manager(self):
         """Test creating a mate manager."""

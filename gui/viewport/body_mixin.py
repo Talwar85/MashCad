@@ -462,6 +462,10 @@ class BodyRenderingMixin:
         """Alias for set_body_visibility - for compatibility with feature_dialogs.py"""
         self.set_body_visibility(body_id, visible)
 
+    def remove_body(self, body_id: str):
+        """Compatibility alias for commands expecting single-body viewport removal."""
+        self.clear_bodies(only_body_id=body_id)
+
     def clear_bodies(self, only_body_id: str = None):
         """
         Entfernt Body-Actors aus dem Viewport.

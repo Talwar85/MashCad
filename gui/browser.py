@@ -1630,7 +1630,7 @@ class ProjectBrowser(QFrame):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        ok_btn = QPushButton("OK")
+        ok_btn = QPushButton(tr("OK"))
         cancel_btn = QPushButton(tr("Cancel"))
 
         ok_btn.clicked.connect(dialog.accept)

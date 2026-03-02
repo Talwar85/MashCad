@@ -208,7 +208,7 @@ class DialogMixin:
             
             # 4. Show as dialog (non-modal)
             dialog = QDialog(self)
-            dialog.setWindowTitle("STL to CAD Reconstruction")
+            dialog.setWindowTitle(tr("STL to CAD Reconstruction"))
             dialog.setMinimumSize(500, 700)
             dialog.setModal(False)
             
@@ -825,8 +825,11 @@ class DialogMixin:
             return
 
         self._hole_target_body = body
+        self.viewport_3d._hole_body_id = body.id
         self.viewport_3d._hole_position = tuple(position)
         self.viewport_3d._hole_normal = tuple(normal)
+        self.viewport_3d._hole_plane_origin = tuple(position)
+        self.viewport_3d._hole_position_locked = False
 
         try:
             from modeling.geometric_selector import GeometricFaceSelector
@@ -866,7 +869,9 @@ class DialogMixin:
         diameter = self.hole_panel.get_diameter()
         depth = self.hole_panel.get_depth()
         self.viewport_3d.show_hole_preview(position, normal, diameter, depth)
-        self.statusBar().showMessage(f"Hole auf {body.name} — Parameter einstellen, Enter bestätigen")
+        self.statusBar().showMessage(
+            f"Hole auf {body.name} — Maus bewegt Vorschau, Klick fixiert, Enter bestätigt"
+        )
     
     # =========================================================================
     # Thread Dialog
@@ -1858,7 +1863,32 @@ class DialogMixin:
             return
 
         WallThicknessDialog(body, parent=self).exec()
-    
+
+    # =========================================================================
+    # Print Optimization Dialog
+    # =========================================================================
+
+    def _optimize_print_orientation_dialog(self):
+        """
+        Open the Print Orientation Optimization Dialog.
+
+        If a body is selected, it's pre-selected in the dialog.
+        Otherwise, user can select from available bodies.
+        """
+        from gui.dialogs.print_optimize_dialog import show_print_optimize_dialog
+
+        try:
+            show_print_optimize_dialog(self)
+        except Exception as e:
+            logger.error(f"Print optimization dialog error: {e}")
+            from PySide6.QtWidgets import QMessageBox
+            from i18n import tr
+            QMessageBox.critical(
+                self,
+                tr("Error"),
+                f"Could not open print optimization dialog:\n{e}"
+            )
+
     # =========================================================================
     # Lattice Dialog
     # =========================================================================

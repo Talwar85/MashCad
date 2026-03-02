@@ -54,7 +54,7 @@ class MenuActionsMixin:
         self.browser.set_document(self.document)
         self._set_mode("3d")
         self._current_project_path = None
-        self.setWindowTitle("MashCAD")
+        self.setWindowTitle(tr("MashCAD"))
         logger.info("Neues Projekt erstellt")
     
     def _save_project(self):
@@ -185,41 +185,75 @@ class MenuActionsMixin:
     # =========================================================================
     # Export Actions
     # =========================================================================
-    
+
     def _export_stl(self):
-        """STL Export with Quality-Dialog and Surface Texture Support."""
+        """STL Export with Quality-Dialog, Printability Check, and Surface Texture Support."""
         from i18n import tr
         from PySide6.QtWidgets import QDialog
-        from gui.dialogs.stl_export_dialog import STLExportDialog
-        
+        from config.feature_flags import is_enabled
+
         bodies = self._get_export_candidates()
         if not bodies:
             logger.warning("Keine sichtbaren Körper zum Exportieren.")
             return
-        
+
+        # Check if printability check is enabled
+        use_printability_check = is_enabled("printability_check")
+
         # Show export settings dialog
-        dlg = STLExportDialog(parent=self)
+        if use_printability_check:
+            from gui.dialogs.stl_export_with_print_check import STLExportWithPrintCheckDialog
+
+            # Create triangle estimator for quality preview
+            def triangle_estimator(linear_defl, angular_tol):
+                total = 0
+                for body in bodies:
+                    if hasattr(body, '_build123d_solid') and body._build123d_solid:
+                        try:
+                            from modeling.cad_tessellator import CADTessellator
+                            verts, tris = CADTessellator.tessellate_for_export(
+                                body._build123d_solid,
+                                linear_deflection=linear_defl,
+                                angular_tolerance=angular_tol
+                            )
+                            if tris:
+                                total += len(tris)
+                        except Exception:
+                            pass
+                return total
+
+            dlg = STLExportWithPrintCheckDialog(bodies, triangle_estimator, parent=self)
+        else:
+            from gui.dialogs.stl_export_dialog import STLExportDialog
+            dlg = STLExportDialog(parent=self)
+
         if dlg.exec() != QDialog.Accepted:
             return
-        
+
         linear_defl = dlg.linear_deflection
         angular_tol = dlg.angular_tolerance
         is_binary = dlg.is_binary
         scale = dlg.scale_factor
-        
+
         path, _ = QFileDialog.getSaveFileName(self, tr("STL exportieren"), "", "STL Files (*.stl)")
         if not path:
             return
-        
+
+        # Log printability warnings if any
+        if use_printability_check and hasattr(dlg, 'has_warnings') and dlg.has_warnings():
+            logger.warning("Exporting STL with known printability issues")
+
         # PERFORMANCE Phase 6: Async export for large meshes
         estimated_complexity = len(bodies) * (1.0 / max(0.01, linear_defl))
         use_async = estimated_complexity > 100 or len(bodies) > 3
-        
+
         if use_async:
             self._export_stl_async(bodies, path, linear_defl, angular_tol, is_binary, scale)
             return
-        
-        self._export_stl_sync(bodies, path, linear_defl, angular_tol, is_binary, scale, dlg.quality_slider.value())
+
+        quality_value = getattr(dlg, 'quality_slider', None)
+        quality_val = quality_value.value() if quality_value else 2
+        self._export_stl_sync(bodies, path, linear_defl, angular_tol, is_binary, scale, quality_val)
     
     def _export_stl_sync(self, bodies, filepath, linear_defl, angular_tol, is_binary, scale, quality_value):
         """Synchronous STL export."""
@@ -329,7 +363,7 @@ class MenuActionsMixin:
             0, 100,
             self
         )
-        progress.setWindowTitle("STL Export")
+        progress.setWindowTitle(tr("STL Export"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -382,7 +416,7 @@ class MenuActionsMixin:
             0, 100,
             self
         )
-        progress.setWindowTitle("STEP Export")
+        progress.setWindowTitle(tr("STEP Export"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -463,7 +497,7 @@ class MenuActionsMixin:
                 0, 100,
                 self
             )
-            progress.setWindowTitle("STEP Import")
+            progress.setWindowTitle(tr("STEP Import"))
             progress.setWindowModality(Qt.WindowModal)
             progress.setMinimumDuration(0)
             progress.setValue(10)
@@ -508,7 +542,7 @@ class MenuActionsMixin:
                 0, 100,
                 self
             )
-            progress.setWindowTitle("CadQuery Import")
+            progress.setWindowTitle(tr("CadQuery Import"))
             progress.setWindowModality(Qt.WindowModal)
             progress.setMinimumDuration(0)
             progress.setValue(10)
@@ -816,7 +850,7 @@ class MenuActionsMixin:
         """Start the complete workflow tutorial for beginners."""
         from gui.tutorial_complete_workflow import start_complete_tutorial
         self._tutorial = start_complete_tutorial(self)
-    
+
     # =========================================================================
     # Helper Methods
     # =========================================================================
