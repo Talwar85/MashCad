@@ -39,9 +39,10 @@ from typing import Any
 
 # Feature Flag Registry
 # =====================
-# Keep only debug flags and real runtime policies.
+# FEATURE_FLAGS contains boolean gates and runtime policies only.
+# FEATURE_SETTINGS contains non-boolean runtime configuration values.
 
-FEATURE_FLAGS: dict[str, Any] = {
+FEATURE_FLAGS: dict[str, bool] = {
     # ========================================================================
     # Debug Modes
     # ========================================================================
@@ -72,7 +73,6 @@ FEATURE_FLAGS: dict[str, Any] = {
     # ========================================================================
     "geometry_drift_detection": True,
     "printability_trust_gate": True,
-    "printability_min_score": 60,
     "printability_block_on_critical": True,
 
     # ========================================================================
@@ -87,7 +87,6 @@ FEATURE_FLAGS: dict[str, Any] = {
     # ========================================================================
     # Solver Configuration
     # ========================================================================
-    "solver_backend": "staged",
     "solver_pre_validation": True,
     "solver_smooth_penalties": True,
 
@@ -95,7 +94,6 @@ FEATURE_FLAGS: dict[str, Any] = {
     # Sketch Performance
     # ========================================================================
     "sketch_drag_optimization": True,
-    "sketch_solver_throttle_ms": 16,
     "incremental_solver": True,
 
     # ========================================================================
@@ -122,12 +120,18 @@ FEATURE_FLAGS: dict[str, Any] = {
     "live_preview_shell": True,
     "live_preview_fillet": True,
     "live_preview_chamfer": True,
-    "preview_debounce_ms": 150,
 
     # ========================================================================
     # Normal Map Preview
     # ========================================================================
     "normal_map_preview": False,
+}
+
+FEATURE_SETTINGS: dict[str, Any] = {
+    "printability_min_score": 60,
+    "solver_backend": "staged",
+    "sketch_solver_throttle_ms": 16,
+    "preview_debounce_ms": 150,
 }
 
 
@@ -140,6 +144,11 @@ def is_enabled(flag: str) -> bool:
     return bool(FEATURE_FLAGS.get(flag, False))
 
 
+def get_setting(name: str, default: Any = None) -> Any:
+    """Return a non-boolean runtime setting."""
+    return FEATURE_SETTINGS.get(name, default)
+
+
 
 def set_flag(flag: str, value: Any) -> None:
     """
@@ -147,7 +156,10 @@ def set_flag(flag: str, value: Any) -> None:
 
     Useful for tests and debugging.
     """
-    FEATURE_FLAGS[flag] = value
+    if flag in FEATURE_SETTINGS:
+        FEATURE_SETTINGS[flag] = value
+        return
+    FEATURE_FLAGS[flag] = bool(value) if isinstance(value, bool) else value
 
 
 # Alias for set_flag (CH-006 compatibility)
@@ -156,7 +168,17 @@ def set_enabled(flag: str, value: Any) -> None:
     set_flag(flag, value)
 
 
+def set_setting(name: str, value: Any) -> None:
+    """Set a non-boolean runtime setting."""
+    FEATURE_SETTINGS[name] = value
+
+
 
 def get_all_flags() -> dict[str, Any]:
     """Return a copy of all feature flags."""
     return FEATURE_FLAGS.copy()
+
+
+def get_all_settings() -> dict[str, Any]:
+    """Return a copy of all runtime settings."""
+    return FEATURE_SETTINGS.copy()

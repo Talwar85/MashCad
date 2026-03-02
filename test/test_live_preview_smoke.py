@@ -93,11 +93,11 @@ def test_fillet_panel_has_signal():
 
 def test_preview_debounce_settings():
     """Testet dass die verbleibende Preview-Konfiguration existiert."""
-    from config.feature_flags import FEATURE_FLAGS
+    from config.feature_flags import FEATURE_SETTINGS
 
-    assert 'preview_debounce_ms' in FEATURE_FLAGS
+    assert 'preview_debounce_ms' in FEATURE_SETTINGS
 
-    assert FEATURE_FLAGS['preview_debounce_ms'] > 0
+    assert FEATURE_SETTINGS['preview_debounce_ms'] > 0
 
 
 def test_is_enabled_function():

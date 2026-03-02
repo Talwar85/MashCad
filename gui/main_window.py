@@ -151,11 +151,11 @@ class MainWindow(
     def _init_preview_system(self):
         """Initialize the live preview system."""
         from PySide6.QtCore import QTimer
-        from config.feature_flags import FEATURE_FLAGS
+        from config.feature_flags import get_setting
         
         self._preview_timers = {}
         self._preview_configs = {}
-        self._preview_debounce_ms = FEATURE_FLAGS.get("preview_debounce_ms", 150)
+        self._preview_debounce_ms = get_setting("preview_debounce_ms", 150)
         
         # Initialize preview timers for each feature type
         for feature_type in ['texture', 'pattern', 'shell', 'fillet', 'chamfer']:

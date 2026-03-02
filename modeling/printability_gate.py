@@ -251,18 +251,19 @@ class PrintabilityGate:
     def _load_feature_flags(self) -> None:
         """Lädt Konfiguration aus Feature Flags."""
         try:
-            from config.feature_flags import is_enabled, FEATURE_FLAGS
+            from config.feature_flags import is_enabled, get_setting
             
             # Gate aktiviert?
             self.enabled = is_enabled("printability_trust_gate")
             
-            # Min Score aus Feature Flags (falls vorhanden)
-            if "printability_min_score" in FEATURE_FLAGS:
-                self.thresholds.min_overall_score = FEATURE_FLAGS["printability_min_score"]
+            # Min Score aus Runtime-Settings
+            self.thresholds.min_overall_score = get_setting(
+                "printability_min_score",
+                self.thresholds.min_overall_score,
+            )
             
-            # Block on Critical aus Feature Flags
-            if "printability_block_on_critical" in FEATURE_FLAGS:
-                self.thresholds.block_on_critical = FEATURE_FLAGS["printability_block_on_critical"]
+            # Block on Critical aus Runtime-Policies
+            self.thresholds.block_on_critical = is_enabled("printability_block_on_critical")
                 
         except ImportError:
             self.enabled = True  # Default: aktiviert

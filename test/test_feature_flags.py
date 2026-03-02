@@ -2,7 +2,15 @@
 
 import pytest
 
-from config.feature_flags import FEATURE_FLAGS, get_all_flags, is_enabled, set_flag
+from config.feature_flags import (
+    FEATURE_FLAGS,
+    FEATURE_SETTINGS,
+    get_all_flags,
+    get_all_settings,
+    get_setting,
+    is_enabled,
+    set_flag,
+)
 
 
 class TestFeatureFlagsBasic:
@@ -26,6 +34,18 @@ class TestFeatureFlagsBasic:
 
         flags1["new_flag"] = True
         assert "new_flag" not in FEATURE_FLAGS
+
+    def test_get_all_settings_returns_dict_copy(self):
+        settings1 = get_all_settings()
+        settings2 = get_all_settings()
+
+        assert isinstance(settings1, dict)
+        assert len(settings1) > 0
+        assert settings1 is not FEATURE_SETTINGS
+        assert settings2 is not FEATURE_SETTINGS
+
+        settings1["new_setting"] = 123
+        assert "new_setting" not in FEATURE_SETTINGS
 
     def test_set_flag_runtime(self):
         set_flag("runtime_test_flag", True)
@@ -110,16 +130,23 @@ class TestActiveRuntimePolicies:
     def test_printability_settings_exist(self):
         flags = get_all_flags()
         assert flags["printability_trust_gate"] is True
-        assert flags["printability_min_score"] == 60
         assert flags["printability_block_on_critical"] is True
+
+        settings = get_all_settings()
+        assert settings["printability_min_score"] == 60
 
     def test_solver_settings_exist(self):
         flags = get_all_flags()
-        assert flags["solver_backend"] == "staged"
+        settings = get_all_settings()
+        assert settings["solver_backend"] == "staged"
         assert flags["solver_pre_validation"] is True
         assert flags["solver_smooth_penalties"] is True
-        assert flags["sketch_solver_throttle_ms"] == 16
-        assert flags["preview_debounce_ms"] == 150
+        assert settings["sketch_solver_throttle_ms"] == 16
+        assert settings["preview_debounce_ms"] == 150
+
+    def test_get_setting_returns_defaults(self):
+        assert get_setting("preview_debounce_ms") == 150
+        assert get_setting("missing_runtime_setting", "fallback") == "fallback"
 
 
 class TestDebugFeatureFlags:

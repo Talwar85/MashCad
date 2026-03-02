@@ -126,12 +126,14 @@ class UnifiedConstraintSolver:
 
     def _read_configured_backend_name(self) -> Tuple[str, str]:
         try:
-            from config.feature_flags import FEATURE_FLAGS
+            from config.feature_flags import get_setting
         except Exception as exc:
             logger.warning(f"[Solver] Feature flags unavailable, defaulting to scipy_lm: {exc}")
             return SolverBackendType.SCIPY_LM.value, "feature flags unavailable"
 
-        backend_name = str(FEATURE_FLAGS.get("solver_backend", SolverBackendType.SCIPY_LM.value) or "").strip()
+        backend_name = str(
+            get_setting("solver_backend", SolverBackendType.SCIPY_LM.value) or ""
+        ).strip()
         if not backend_name:
             return SolverBackendType.SCIPY_LM.value, "empty solver_backend flag"
 

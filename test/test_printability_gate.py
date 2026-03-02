@@ -571,12 +571,12 @@ class TestFeatureFlags:
         assert FEATURE_FLAGS["printability_trust_gate"] == True
     
     def test_printability_min_score_flag_exists(self):
-        """Test: printability_min_score flag exists."""
-        from config.feature_flags import FEATURE_FLAGS
+        """Test: printability_min_score runtime setting exists."""
+        from config.feature_flags import FEATURE_SETTINGS
         
-        assert "printability_min_score" in FEATURE_FLAGS
-        assert isinstance(FEATURE_FLAGS["printability_min_score"], int)
-        assert 0 <= FEATURE_FLAGS["printability_min_score"] <= 100
+        assert "printability_min_score" in FEATURE_SETTINGS
+        assert isinstance(FEATURE_SETTINGS["printability_min_score"], int)
+        assert 0 <= FEATURE_SETTINGS["printability_min_score"] <= 100
     
     def test_printability_block_on_critical_flag_exists(self):
         """Test: printability_block_on_critical flag exists."""
