@@ -39,7 +39,7 @@ class BodyExtrudeMixin:
             from OCP.BRep import BRep_Builder
             from build123d import Face, Vector
             from modeling.ocp_helpers import OCPExtrudeHelper
-            from modeling.tnp_system import ShapeNamingService
+            from modeling.tnp_v5.feature_integration import get_tnp_v5_service
 
             face_brep = feature.face_brep
             if not face_brep:
@@ -63,11 +63,11 @@ class BodyExtrudeMixin:
             amount = feature.distance * feature.direction
             direction = Vector(normal[0], normal[1], normal[2])
 
-            naming_service = None
-            if self._document and hasattr(self._document, '_shape_naming_service'):
-                naming_service = self._document._shape_naming_service
+            naming_service = get_tnp_v5_service(self._document)
             if naming_service is None:
-                naming_service = ShapeNamingService()
+                raise RuntimeError(
+                    "Extrude requires a Document-bound TNPService; detached bodies are unsupported"
+                )
 
             feature_id = getattr(feature, 'id', None) or 'face_brep_extrude'
 
@@ -111,8 +111,8 @@ class BodyExtrudeMixin:
         - Verbindliche TNP Integration durchführt
         - Alle Faces/Edges im ShapeNamingService registriert
         """
-        from modeling.tnp_system import ShapeNamingService
-        
+        from modeling.tnp_v5.feature_integration import get_tnp_v5_service
+
         # Phase 2: Prüfe Geometrie-Quelle
         has_sketch = feature.sketch is not None
         has_polys = hasattr(feature, 'precalculated_polys') and feature.precalculated_polys
@@ -134,17 +134,11 @@ class BodyExtrudeMixin:
             feature.id = str(uuid.uuid4())[:8]
             logger.debug(f"[OCP-FIRST] Generated ID for ExtrudeFeature: {feature.id}")
 
-        # TNP Service holen
-        naming_service = None
-        if self._document and hasattr(self._document, '_shape_naming_service'):
-            naming_service = self._document._shape_naming_service
-
+        # TNP Service holen — immer über Document
+        naming_service = get_tnp_v5_service(self._document)
         if naming_service is None:
-            # Legacy-Compat: Extrude ohne Document soll weiterhin laufen
-            naming_service = ShapeNamingService()
-            logger.debug(
-                "[OCP-FIRST] Kein Document-ShapeNamingService vorhanden; "
-                "verwende temporaeren Service fuer Extrude."
+            raise RuntimeError(
+                "OCP-first extrude requires a Document-bound TNPService; detached bodies are unsupported"
             )
 
         try:

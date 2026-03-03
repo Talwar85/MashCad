@@ -168,7 +168,7 @@ class TestExtrudeFlagIntegration:
         assert len(feature.id) > 0, "Feature-ID sollte nicht leer sein"
 
     def test_error_without_tnp_service(self):
-        """Test: OCP-First Pfad wirft Fehler ohne TNP Service."""
+        """Test: OCP-First Pfad blockiert detached bodies ohne Document-Service."""
         # Arrange
         set_flag("ocp_first_extrude", True)
         body = Body("TestBody", document=None)  # Kein Document = Kein TNP Service
@@ -183,10 +183,8 @@ class TestExtrudeFlagIntegration:
         feature.plane_normal = (0, 0, 1)
         feature.id = "test_feature"
 
-        # Act - should NOT raise, instead creates temporary TNP service
-        # The production code gracefully handles missing TNP service by creating a temporary one
-        result = body._compute_extrude_part(feature)
-        assert result is not None, "Extrude should succeed with temporary TNP service"
+        with pytest.raises(RuntimeError, match="Document-bound TNPService"):
+            body._compute_extrude_part(feature)
 
 
 # ============================================================================

@@ -28,28 +28,57 @@ def get_tnp_v5_service(document: Any) -> Optional[TNPService]:
     if document is None:
         return None
 
-    # Single-service runtime: prefer the document's primary naming service.
+    # Single-service runtime: both document service slots must converge to the
+    # same TNPService instance.
     document_dict = getattr(document, '__dict__', {})
     primary_service = document_dict.get('_shape_naming_service')
-    if primary_service is not None:
+    service = document_dict.get('_tnp_v5_service')
+
+    if isinstance(primary_service, TNPService):
         document._tnp_v5_service = primary_service
         return primary_service
 
-    # Try to get existing service
-    service = document_dict.get('_tnp_v5_service')
-    if service is not None:
+    if isinstance(service, TNPService):
+        document._shape_naming_service = service
         return service
 
-    # Create new service
     try:
         doc_id = getattr(document, 'name', 'unknown')
         service = TNPService(document_id=doc_id)
+        can_migrate = (
+            primary_service is not None
+            and all(
+                hasattr(primary_service, attr)
+                for attr in ('_shapes', '_operations', '_by_feature')
+            )
+        )
+        if can_migrate:
+            from .migration import TNPMigration
+
+            migrated = TNPMigration.migrate_service_v4_to_v5(primary_service, service)
+            if migrated:
+                logger.info(
+                    f"[TNP v5.0] Migrated legacy naming service for document '{doc_id}'"
+                )
+            else:
+                logger.warning(
+                    f"[TNP v5.0] Legacy naming service migration failed for '{doc_id}', "
+                    "using empty TNPService"
+                )
+        elif primary_service is not None:
+            logger.warning(
+                f"[TNP v5.0] _shape_naming_service is {type(primary_service).__name__}, "
+                "expected TNPService; replacing it"
+            )
+
+        document._shape_naming_service = service
         document._tnp_v5_service = service
         logger.debug(f"[TNP v5.0] Created service for document '{doc_id}'")
         return service
     except Exception as e:
         logger.warning(f"[TNP v5.0] Failed to create service: {e}")
         return None
+
 
 
 def capture_sketch_selection_context(

@@ -47,12 +47,12 @@ class TestGetTNPV5Service:
     def test_get_service_returns_existing(self):
         """Test returning existing service."""
         doc = Mock()
-        existing_service = Mock()
+        existing_service = TNPService(document_id="existing")
         doc._tnp_v5_service = existing_service
 
         service = get_tnp_v5_service(doc)
 
-        assert service == existing_service
+        assert service is existing_service
 
     def test_get_service_creates_without_feature_flag_gate(self):
         """TNP v5.0 service is always available once the runtime is v5-only."""
@@ -64,6 +64,34 @@ class TestGetTNPV5Service:
 
         assert service is not None
         assert service.document_id == "always_on_doc"
+        assert doc._tnp_v5_service is service
+
+    def test_get_service_normalizes_existing_v5_service_to_primary_slot(self):
+        """Existing v5 secondary service becomes the primary document service."""
+        doc = Mock()
+        existing_service = TNPService(document_id="normalized_doc")
+        doc._shape_naming_service = None
+        doc._tnp_v5_service = existing_service
+
+        service = get_tnp_v5_service(doc)
+
+        assert service is existing_service
+        assert doc._shape_naming_service is existing_service
+
+    def test_get_service_migrates_legacy_primary_slot(self):
+        """Legacy primary services are replaced with a TNPService."""
+        class LegacyService:
+            pass
+
+        doc = Mock()
+        doc.name = "legacy_doc"
+        doc._shape_naming_service = LegacyService()
+        doc._tnp_v5_service = None
+
+        service = get_tnp_v5_service(doc)
+
+        assert isinstance(service, TNPService)
+        assert doc._shape_naming_service is service
         assert doc._tnp_v5_service is service
 
 
@@ -455,16 +483,12 @@ class TestExtrudeIntegrationWorkflow:
         feature = ExtrudeFeature()
         store_tnp_v5_data_in_feature(feature, face_ids)
 
-        # Mock exact match failure
-        original_try_exact = service._try_exact_match
-        service._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to force exact match failure
+        service._shape_exists_in_solid = Mock(return_value=False)
 
-        try:
-            # Resolve (should use semantic)
-            from modeling.tnp_v5.types import ResolutionOptions, ResolutionMethod
-            result = service.resolve(face_ids[0], solid, ResolutionOptions(use_semantic_matching=True))
+        # Resolve (should use semantic)
+        from modeling.tnp_v5.types import ResolutionOptions, ResolutionMethod
+        result = service.resolve(face_ids[0], solid, ResolutionOptions(use_semantic_matching=True))
 
-            # Should have attempted semantic match
-            assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
-        finally:
-            service._try_exact_match = original_try_exact
+        # Should have attempted semantic match
+        assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)

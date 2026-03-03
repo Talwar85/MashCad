@@ -1,5 +1,5 @@
 from modeling.document import Document
-from modeling.tnp_system import ShapeNamingService, ShapeType
+from modeling.tnp_v5 import ShapeNamingService, ShapeType, TNPService
 from modeling.tnp_v5 import SelectionContext
 from modeling.tnp_v5.feature_integration import get_tnp_v5_service
 
@@ -38,3 +38,22 @@ def test_primary_shape_naming_service_accepts_v5_selection_context():
     assert record is not None
     assert record.selection_context == context
     assert record.shape_id.uuid == shape_id.uuid
+
+
+def test_legacy_primary_service_is_normalized_to_tnp5():
+    class LegacyService:
+        pass
+
+    class Doc:
+        def __init__(self):
+            self.name = "legacy_doc"
+            self._shape_naming_service = LegacyService()
+            self._tnp_v5_service = None
+
+    doc = Doc()
+
+    service = get_tnp_v5_service(doc)
+
+    assert isinstance(service, TNPService)
+    assert doc._shape_naming_service is service
+    assert doc._tnp_v5_service is service

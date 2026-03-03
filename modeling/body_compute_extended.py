@@ -93,7 +93,7 @@ class BodyComputeExtendedMixin:
             ):
                 return
             try:
-                from modeling.tnp_system import ShapeType as TNPShapeType
+                from modeling.tnp_v5 import ShapeType as TNPShapeType
                 shape_id = shape_service.find_shape_id_by_face(face_obj)
                 if shape_id is None:
                     fc = face_obj.center()
@@ -409,7 +409,7 @@ class BodyComputeExtendedMixin:
                 feature_id = getattr(feature, 'id', None) or str(id(feature))
 
                 # Alle Faces registrieren
-                from modeling.tnp_system import ShapeType
+                from modeling.tnp_v5 import ShapeType
                 from OCP.TopExp import TopExp_Explorer
                 from OCP.TopAbs import TopAbs_FACE
 
@@ -608,7 +608,7 @@ class BodyComputeExtendedMixin:
                 feature_id = getattr(feature, 'id', None) or str(id(feature))
 
                 # Alle Faces registrieren
-                from modeling.tnp_system import ShapeType
+                from modeling.tnp_v5 import ShapeType
                 from OCP.TopExp import TopExp_Explorer
                 from OCP.TopAbs import TopAbs_FACE
 
@@ -714,7 +714,7 @@ class BodyComputeExtendedMixin:
         if resolved_edges and self._document and hasattr(self._document, '_shape_naming_service'):
             try:
                 from modeling.geometric_selector import GeometricEdgeSelector
-                from modeling.tnp_system import ShapeType
+                from modeling.tnp_v5 import ShapeType
                 service = self._document._shape_naming_service
 
                 new_shape_ids = []
@@ -1857,7 +1857,7 @@ class BodyComputeExtendedMixin:
             return
 
         from modeling.geometric_selector import GeometricEdgeSelector
-        from modeling.tnp_system import ShapeType
+        from modeling.tnp_v5 import ShapeType
 
         geometric_selectors = getattr(feature, 'geometric_selectors', [])
         if not geometric_selectors:
@@ -2034,7 +2034,7 @@ class BodyComputeExtendedMixin:
             return
 
         try:
-            from modeling.tnp_system import ShapeType, OperationRecord
+            from modeling.tnp_v5 import ShapeType, OperationRecord
             from OCP.TopAbs import TopAbs_FACE
 
             service = self._document._shape_naming_service
@@ -2103,7 +2103,7 @@ class BodyComputeExtendedMixin:
             return
 
         try:
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
             from OCP.TopAbs import TopAbs_FACE
 
             service = self._document._shape_naming_service
@@ -2147,7 +2147,7 @@ class BodyComputeExtendedMixin:
             return
 
         try:
-            from modeling.tnp_system import ShapeType, OperationRecord
+            from modeling.tnp_v5 import ShapeType, OperationRecord
             import numpy as np
 
             service = self._document._shape_naming_service
@@ -2244,14 +2244,16 @@ class BodyComputeExtendedMixin:
 
     def _get_or_create_shape_naming_service(self):
         """
-        Liefert den aktiven ShapeNamingService oder erstellt einen temporären.
+        Liefert den aktiven TNPService vom Document.
         """
-        if self._document and hasattr(self._document, "_shape_naming_service"):
-            service = self._document._shape_naming_service
-            if service is not None:
-                return service
-        from modeling.tnp_system import ShapeNamingService
-        return ShapeNamingService()
+        from modeling.tnp_v5.feature_integration import get_tnp_v5_service
+
+        service = get_tnp_v5_service(self._document)
+        if service is not None:
+            return service
+        raise RuntimeError(
+            "TNP-backed operations require a Document-bound TNPService; detached bodies are unsupported"
+        )
 
     # OCP helpers
     def _ocp_fillet(self, solid, edges, radius, feature_id: Optional[str] = None):
