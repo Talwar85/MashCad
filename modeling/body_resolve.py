@@ -9,7 +9,7 @@ from typing import List, Optional, Dict
 from loguru import logger
 
 from config.feature_flags import is_enabled
-from modeling.tnp_system import ShapeType
+from modeling.tnp_v5 import ShapeType
 
 from modeling.features.extrude import ExtrudeFeature
 from modeling.features.advanced import (

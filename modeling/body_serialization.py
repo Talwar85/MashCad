@@ -28,6 +28,109 @@ from modeling.features.advanced import (
     LatticeFeature
 )
 from modeling.features.import_feature import ImportFeature
+
+
+# ============================================================================
+# TNP v5.0 Serialization Helpers
+# ============================================================================
+
+def _serialize_shape_id(sid) -> dict:
+    """Serialize a ShapeID to a dictionary."""
+    return {
+        "uuid": sid.uuid,
+        "shape_type": sid.shape_type.name,
+        "feature_id": sid.feature_id,
+        "local_index": sid.local_index,
+        "geometry_hash": sid.geometry_hash,
+        "timestamp": sid.timestamp,
+    }
+
+
+def _deserialize_shape_id(sid_data: dict):
+    """Deserialize a ShapeID from a dictionary."""
+    from modeling.tnp_v5 import ShapeID, ShapeType
+    return ShapeID(
+        uuid=sid_data.get("uuid", ""),
+        shape_type=ShapeType[sid_data.get("shape_type", "EDGE")],
+        feature_id=sid_data.get("feature_id", ""),
+        local_index=sid_data.get("local_index", 0),
+        geometry_hash=sid_data.get("geometry_hash", ""),
+        timestamp=sid_data.get("timestamp", 0.0),
+    )
+
+
+def _serialize_shape_id_list(shape_ids: list) -> list:
+    """Serialize a list of ShapeIDs."""
+    return [_serialize_shape_id(sid) for sid in shape_ids if hasattr(sid, "uuid")]
+
+
+def _deserialize_shape_id_list(data: list) -> list:
+    """Deserialize a list of ShapeID dicts."""
+    result = []
+    for sid_data in data:
+        if isinstance(sid_data, dict):
+            result.append(_deserialize_shape_id(sid_data))
+    return result
+
+
+def _serialize_selection_contexts(contexts: list) -> list:
+    """Serialize a list of SelectionContext objects."""
+    return [ctx.to_dict() if hasattr(ctx, "to_dict") else ctx for ctx in contexts]
+
+
+def _deserialize_selection_contexts(data: list) -> list:
+    """Deserialize a list of SelectionContext dicts."""
+    from modeling.tnp_v5 import SelectionContext
+    result = []
+    for ctx_data in data:
+        if isinstance(ctx_data, dict):
+            result.append(SelectionContext.from_dict(ctx_data))
+    return result
+
+
+def _serialize_tnp_v5_fields(feat, feat_dict: dict, field_names: list):
+    """Generic serializer for tnp_v5_ fields on a feature."""
+    for name in field_names:
+        val = getattr(feat, name, None)
+        if val is None:
+            continue
+        if name.endswith("_contexts") or name == "tnp_v5_selection_context":
+            if isinstance(val, list) and val:
+                feat_dict[name] = _serialize_selection_contexts(val)
+            elif isinstance(val, dict) and val:
+                from modeling.tnp_v5 import SelectionContext
+                if isinstance(val, SelectionContext):
+                    feat_dict[name] = val.to_dict()
+                else:
+                    feat_dict[name] = val
+        elif name == "tnp_v5_transformation_map":
+            if val:
+                feat_dict[name] = val
+        elif name == "tnp_v5_occt_history":
+            if val:
+                feat_dict[name] = val
+        elif isinstance(val, list) and val:
+            feat_dict[name] = _serialize_shape_id_list(val)
+
+
+def _deserialize_tnp_v5_fields(feat, feat_dict: dict, field_names: list):
+    """Generic deserializer for tnp_v5_ fields on a feature."""
+    for name in field_names:
+        if name not in feat_dict:
+            continue
+        val = feat_dict[name]
+        if name.endswith("_contexts"):
+            setattr(feat, name, _deserialize_selection_contexts(val) if isinstance(val, list) else [])
+        elif name == "tnp_v5_selection_context":
+            if isinstance(val, dict):
+                from modeling.tnp_v5 import SelectionContext
+                setattr(feat, name, SelectionContext.from_dict(val))
+        elif name == "tnp_v5_transformation_map":
+            setattr(feat, name, val if isinstance(val, dict) else {})
+        elif name == "tnp_v5_occt_history":
+            setattr(feat, name, val if isinstance(val, dict) else None)
+        elif isinstance(val, list):
+            setattr(feat, name, _deserialize_shape_id_list(val))
 from modeling.features.cadquery_feature import CadQueryFeature
 
 # OCP/build123d availability flags (set by body.py)
@@ -190,20 +293,17 @@ def _serialize_extrude_feature(feat, feat_dict: dict):
     if getattr(feat, "face_shape_id", None):
         sid = feat.face_shape_id
         if hasattr(sid, "uuid"):
-            feat_dict["face_shape_id"] = {
-                "uuid": sid.uuid,
-                "shape_type": sid.shape_type.name,
-                "feature_id": sid.feature_id,
-                "local_index": sid.local_index,
-                "geometry_hash": sid.geometry_hash,
-                "timestamp": sid.timestamp,
-            }
+            feat_dict["face_shape_id"] = _serialize_shape_id(sid)
         elif hasattr(sid, "feature_id") and hasattr(sid, "local_id"):
             feat_dict["face_shape_id"] = {
                 "feature_id": sid.feature_id,
                 "local_id": sid.local_id,
                 "shape_type": "FACE",
             }
+    # TNP v5.0 fields
+    _serialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_face_ids", "tnp_v5_edge_ids", "tnp_v5_selection_contexts",
+    ])
 
 
 def _serialize_fillet_feature(feat, feat_dict: dict):
@@ -222,17 +322,12 @@ def _serialize_fillet_feature(feat, feat_dict: dict):
             for gs in feat.geometric_selectors
         ]
     if feat.edge_shape_ids:
-        feat_dict["edge_shape_ids"] = [
-            {
-                "uuid": sid.uuid,
-                "shape_type": sid.shape_type.name,
-                "feature_id": sid.feature_id,
-                "local_index": sid.local_index,
-                "geometry_hash": sid.geometry_hash,
-                "timestamp": sid.timestamp
-            }
-            for sid in feat.edge_shape_ids
-        ]
+        feat_dict["edge_shape_ids"] = _serialize_shape_id_list(feat.edge_shape_ids)
+    # TNP v5.0 fields
+    _serialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_input_edge_ids", "tnp_v5_output_edge_ids",
+        "tnp_v5_output_face_ids", "tnp_v5_selection_contexts",
+    ])
 
 
 def _serialize_chamfer_feature(feat, feat_dict: dict):
@@ -251,17 +346,12 @@ def _serialize_chamfer_feature(feat, feat_dict: dict):
             for gs in feat.geometric_selectors
         ]
     if feat.edge_shape_ids:
-        feat_dict["edge_shape_ids"] = [
-            {
-                "uuid": sid.uuid,
-                "shape_type": sid.shape_type.name,
-                "feature_id": sid.feature_id,
-                "local_index": sid.local_index,
-                "geometry_hash": sid.geometry_hash,
-                "timestamp": sid.timestamp
-            }
-            for sid in feat.edge_shape_ids
-        ]
+        feat_dict["edge_shape_ids"] = _serialize_shape_id_list(feat.edge_shape_ids)
+    # TNP v5.0 fields
+    _serialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_input_edge_ids", "tnp_v5_output_edge_ids",
+        "tnp_v5_output_face_ids", "tnp_v5_selection_contexts",
+    ])
 
 
 def _serialize_revolve_feature(feat, feat_dict: dict):
@@ -684,17 +774,13 @@ def _serialize_boolean_feature(feat, feat_dict: dict):
         "expected_volume_change": feat.expected_volume_change,
     })
     if feat.modified_shape_ids:
-        feat_dict["modified_shape_ids"] = [
-            {
-                "uuid": sid.uuid,
-                "shape_type": sid.shape_type.name,
-                "feature_id": sid.feature_id,
-                "local_index": sid.local_index,
-                "geometry_hash": sid.geometry_hash,
-                "timestamp": sid.timestamp
-            }
-            for sid in feat.modified_shape_ids
-        ]
+        feat_dict["modified_shape_ids"] = _serialize_shape_id_list(feat.modified_shape_ids)
+    # TNP v5.0 fields
+    _serialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_input_face_ids", "tnp_v5_input_edge_ids",
+        "tnp_v5_output_face_ids", "tnp_v5_output_edge_ids",
+        "tnp_v5_occt_history", "tnp_v5_transformation_map",
+    ])
 
 
 def _serialize_pushpull_feature(feat, feat_dict: dict):
@@ -724,15 +810,11 @@ def _serialize_pushpull_feature(feat, feat_dict: dict):
         except Exception:
             pass
     if feat.face_shape_id and hasattr(feat.face_shape_id, "uuid"):
-        sid = feat.face_shape_id
-        feat_dict["face_shape_id"] = {
-            "uuid": sid.uuid,
-            "shape_type": sid.shape_type.name,
-            "feature_id": sid.feature_id,
-            "local_index": sid.local_index,
-            "geometry_hash": sid.geometry_hash,
-            "timestamp": sid.timestamp
-        }
+        feat_dict["face_shape_id"] = _serialize_shape_id(feat.face_shape_id)
+    # TNP v5.0 fields
+    _serialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_face_ids", "tnp_v5_edge_ids", "tnp_v5_selection_context",
+    ])
 
 
 def _serialize_pattern_feature(feat, feat_dict: dict):
@@ -1007,7 +1089,7 @@ def _deserialize_extrude_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'Ex
         feat.face_brep = feat_dict["face_brep"]
         feat.face_type = feat_dict.get("face_type")
     if "face_shape_id" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         sid_data = feat_dict["face_shape_id"]
         if isinstance(sid_data, dict):
             shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
@@ -1028,6 +1110,10 @@ def _deserialize_extrude_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'Ex
                     local_index=local_index,
                     geometry_data=("legacy_extrude_face", feat_dict.get("id", feat.id), local_index),
                 )
+    # TNP v5.0 fields
+    _deserialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_face_ids", "tnp_v5_edge_ids", "tnp_v5_selection_contexts",
+    ])
     return feat
 
 
@@ -1048,7 +1134,7 @@ def _deserialize_fillet_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'Fil
             for gs in feat_dict["geometric_selectors"]
         ]
     if "edge_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.edge_shape_ids = []
         for sid_data in feat_dict["edge_shape_ids"]:
             if isinstance(sid_data, dict):
@@ -1063,6 +1149,11 @@ def _deserialize_fillet_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'Fil
                 ))
     if not feat.geometric_selectors and legacy_edge_selectors:
         feat.geometric_selectors = cls._convert_legacy_edge_selectors(legacy_edge_selectors)
+    # TNP v5.0 fields
+    _deserialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_input_edge_ids", "tnp_v5_output_edge_ids",
+        "tnp_v5_output_face_ids", "tnp_v5_selection_contexts",
+    ])
     return feat
 
 
@@ -1083,7 +1174,7 @@ def _deserialize_chamfer_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'Ch
             for gs in feat_dict["geometric_selectors"]
         ]
     if "edge_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.edge_shape_ids = []
         for sid_data in feat_dict["edge_shape_ids"]:
             if isinstance(sid_data, dict):
@@ -1098,6 +1189,11 @@ def _deserialize_chamfer_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'Ch
                 ))
     if not feat.geometric_selectors and legacy_edge_selectors:
         feat.geometric_selectors = cls._convert_legacy_edge_selectors(legacy_edge_selectors)
+    # TNP v5.0 fields
+    _deserialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_input_edge_ids", "tnp_v5_output_edge_ids",
+        "tnp_v5_output_face_ids", "tnp_v5_selection_contexts",
+    ])
     return feat
 
 
@@ -1119,7 +1215,7 @@ def _deserialize_revolve_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'Re
     feat.face_selector = feat_dict.get("face_selector")
     if "face_shape_id" in feat_dict and feat_dict["face_shape_id"]:
         sid_data = feat_dict["face_shape_id"]
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         if "uuid" in sid_data:
             feat.face_shape_id = ShapeID(
                 uuid=sid_data["uuid"],
@@ -1163,7 +1259,7 @@ def _deserialize_loft_feature(feat_dict: dict, base_kwargs: dict) -> 'LoftFeatur
         **base_kwargs
     )
     if "profile_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.profile_shape_ids = []
         for sid_data in feat_dict["profile_shape_ids"]:
             if isinstance(sid_data, dict):
@@ -1223,7 +1319,7 @@ def _deserialize_sweep_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'Swee
                 feat.profile_face_index = profile_idx
         except Exception:
             pass
-    from modeling.tnp_system import ShapeID, ShapeType
+    from modeling.tnp_v5 import ShapeID, ShapeType
     if "profile_shape_id" in feat_dict:
         sid_data = feat_dict["profile_shape_id"]
         if isinstance(sid_data, dict):
@@ -1302,7 +1398,7 @@ def _deserialize_shell_feature(feat_dict: dict, base_kwargs: dict) -> 'ShellFeat
     )
     feat.thickness_formula = feat_dict.get("thickness_formula")
     if "face_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.face_shape_ids = []
         for idx, sid_data in enumerate(feat_dict["face_shape_ids"]):
             if isinstance(sid_data, dict):
@@ -1359,7 +1455,7 @@ def _deserialize_hole_feature(feat_dict: dict, base_kwargs: dict) -> 'HoleFeatur
     feat.diameter_formula = feat_dict.get("diameter_formula")
     feat.depth_formula = feat_dict.get("depth_formula")
     if "face_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.face_shape_ids = []
         for idx, sid_data in enumerate(feat_dict["face_shape_ids"]):
             if isinstance(sid_data, dict):
@@ -1396,7 +1492,7 @@ def _deserialize_hollow_feature(feat_dict: dict, base_kwargs: dict) -> 'HollowFe
         **base_kwargs
     )
     if "opening_face_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.opening_face_shape_ids = []
         for sid_data in feat_dict["opening_face_shape_ids"]:
             if isinstance(sid_data, dict):
@@ -1458,7 +1554,7 @@ def _deserialize_pushpull_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'P
         except Exception:
             pass
     if "face_shape_id" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         sid_data = feat_dict["face_shape_id"]
         if isinstance(sid_data, dict):
             shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
@@ -1479,6 +1575,10 @@ def _deserialize_pushpull_feature(feat_dict: dict, base_kwargs: dict, cls) -> 'P
                     local_index=local_index,
                     geometry_data=("legacy_pushpull_face", feat_dict.get("id", feat.id), local_index),
                 )
+    # TNP v5.0 fields
+    _deserialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_face_ids", "tnp_v5_edge_ids", "tnp_v5_selection_context",
+    ])
     return feat
 
 
@@ -1512,7 +1612,7 @@ def _deserialize_nsided_patch_feature(feat_dict: dict, base_kwargs: dict, cls) -
         **base_kwargs
     )
     if "edge_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.edge_shape_ids = []
         for idx, sid_data in enumerate(feat_dict["edge_shape_ids"]):
             if isinstance(sid_data, dict):
@@ -1560,7 +1660,7 @@ def _deserialize_surface_texture_feature(feat_dict: dict, base_kwargs: dict) -> 
         **base_kwargs
     )
     if "face_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.face_shape_ids = []
         for idx, sid_data in enumerate(feat_dict["face_shape_ids"]):
             if isinstance(sid_data, dict):
@@ -1603,7 +1703,7 @@ def _deserialize_thread_feature(feat_dict: dict, base_kwargs: dict) -> 'ThreadFe
         **base_kwargs
     )
     if "face_shape_id" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         sid_data = feat_dict["face_shape_id"]
         if isinstance(sid_data, dict):
             shape_type = ShapeType[sid_data.get("shape_type", "FACE")]
@@ -1651,7 +1751,7 @@ def _deserialize_draft_feature(feat_dict: dict, base_kwargs: dict) -> 'DraftFeat
         **base_kwargs
     )
     if "face_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.face_shape_ids = []
         for idx, sid_data in enumerate(feat_dict["face_shape_ids"]):
             if isinstance(sid_data, dict):
@@ -1706,7 +1806,7 @@ def _deserialize_boolean_feature(feat_dict: dict, base_kwargs: dict) -> 'Boolean
         **base_kwargs
     )
     if "modified_shape_ids" in feat_dict:
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         feat.modified_shape_ids = []
         for sid_data in feat_dict["modified_shape_ids"]:
             if isinstance(sid_data, dict):
@@ -1719,6 +1819,12 @@ def _deserialize_boolean_feature(feat_dict: dict, base_kwargs: dict) -> 'Boolean
                     geometry_hash=sid_data.get("geometry_hash", ""),
                     timestamp=sid_data.get("timestamp", 0.0)
                 ))
+    # TNP v5.0 fields
+    _deserialize_tnp_v5_fields(feat, feat_dict, [
+        "tnp_v5_input_face_ids", "tnp_v5_input_edge_ids",
+        "tnp_v5_output_face_ids", "tnp_v5_output_edge_ids",
+        "tnp_v5_occt_history", "tnp_v5_transformation_map",
+    ])
     return feat
 
 

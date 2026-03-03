@@ -33,7 +33,7 @@ from modeling import (
 )
 from modeling.geometric_selector import GeometricFaceSelector
 from modeling.topology_indexing import edge_index_of, face_index_of
-from modeling.tnp_system import ShapeType
+from modeling.tnp_v5 import ShapeType
 from sketcher.sketch import Sketch, SketchState
 from sketcher.geometry import Point2D, Line2D, Circle2D, Arc2D
 from sketcher.operations.trim import TrimOperation

@@ -93,7 +93,7 @@ class OCPExtrudeHelper:
         
         # TNP: Alle Shapes registrieren (OBLIGATORISCH!)
         try:
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
             
             # Alle Faces registrieren
             explorer = TopExp_Explorer(result_shape, TopAbs_FACE)
@@ -197,7 +197,7 @@ class OCPFilletHelper:
 
         # TNP: Alle Shapes registrieren (OBLIGATORISCH!)
         try:
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
 
             # ZUERST: History im ShapeNamingService speichern!
             if occt_history is not None and naming_service is not None:
@@ -423,7 +423,7 @@ class OCPChamferHelper:
 
         # TNP: Alle Shapes registrieren
         try:
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
 
             # ZUERST: History im ShapeNamingService speichern!
             if occt_history is not None and naming_service is not None:

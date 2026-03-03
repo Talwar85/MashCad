@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional, List
 from .base import Feature, FeatureType
-from modeling.tnp_system import ShapeID
+from modeling.tnp_v5 import ShapeID
 
 
 def _canonicalize_indices(indices):

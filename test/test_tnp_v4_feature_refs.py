@@ -17,7 +17,7 @@ from modeling import (
     PrimitiveFeature,
 )
 from modeling.geometric_selector import GeometricEdgeSelector
-from modeling.tnp_system import ShapeID, ShapeType
+from modeling.tnp_v5 import ShapeID, ShapeType
 
 
 def _make_shape_id(shape_type: ShapeType, feature_id: str, local_index: int) -> ShapeID:
@@ -2010,8 +2010,7 @@ def test_rebuild_pushpull_failure_blocks_downstream_and_skips_legacy_fallback(mo
     assert legacy_calls["count"] == 0
 
     assert downstream.status == "ERROR"
-    # Use UTF-8 encoded string for comparison (German umlaut 'ü')
-    assert "Nicht ausgef\xc3\xbchrt: vorheriges Feature" in (downstream.status_message or "")
+    assert "Nicht ausgeführt: vorheriges Feature" in (downstream.status_message or "")
     assert (downstream.status_details or {}).get("code") == "blocked_by_upstream_error"
 
 

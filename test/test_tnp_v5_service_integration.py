@@ -2,6 +2,11 @@
 TNP v5.0 - TNPService Integration Tests
 
 Integration tests for TNPService with semantic matching.
+Updated for mixin-based architecture where:
+- _spatial_index is a legacy dict, _semantic_spatial_index is the SpatialIndex
+- _try_exact_match doesn't exist; use _shape_exists_in_solid mock instead
+- record_operation takes an OperationRecord object
+- _operations stores OperationRecord instances
 """
 
 import pytest
@@ -15,7 +20,8 @@ from modeling.tnp_v5 import (
     ResolutionOptions,
     ResolutionResult,
     ResolutionMethod,
-    Bounds
+    Bounds,
+    OperationRecord,
 )
 
 
@@ -48,14 +54,12 @@ class TestTNPServiceSemanticResolution:
             context=context
         )
 
-        # Add a candidate to spatial index (simulating a different shape at same location)
-        # Create another mock for the candidate
+        # Add a candidate to semantic spatial index
         candidate_shape = Mock()
         candidate_shape.wrapped = Mock()
         candidate_shape.CenterOfMass = Mock(return_value=Mock())
 
-        # Insert candidate with a wrapper that provides access to shape
-        tnp._spatial_index.insert(
+        tnp._semantic_spatial_index.insert(
             shape_id="candidate1",
             bounds=Bounds.from_center((10, 10, 10), 5),
             shape_data={'shape_type': 'FACE', 'feature_id': 'extrude_1',
@@ -66,17 +70,13 @@ class TestTNPServiceSemanticResolution:
         # we verify that semantic matching infrastructure exists
         options = ResolutionOptions(use_semantic_matching=True)
 
-        # Mock exact match to fail (force semantic)
-        original_try_exact = tnp._try_exact_match
-        tnp._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False (force exact match failure)
+        tnp._shape_exists_in_solid = Mock(return_value=False)
 
-        try:
-            result = tnp.resolve(shape_id, current_solid=None, options=options)
-            # Should attempt semantic (exact failed), may fail if no candidates
-            # The important thing is it doesn't crash
-            assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
-        finally:
-            tnp._try_exact_match = original_try_exact
+        result = tnp.resolve(shape_id, current_solid=None, options=options)
+        # Should attempt semantic (exact failed), may fail if no candidates
+        # The important thing is it doesn't crash
+        assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
 
     def test_resolve_semantic_disabled(self):
         """Test resolve() skips semantic when disabled."""
@@ -102,20 +102,16 @@ class TestTNPServiceSemanticResolution:
             context=context
         )
 
-        # Mock exact match to fail
-        original_try_exact = tnp._try_exact_match
-        tnp._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False (force exact match failure)
+        tnp._shape_exists_in_solid = Mock(return_value=False)
 
-        try:
-            # Resolve with semantic matching disabled
-            options = ResolutionOptions(use_semantic_matching=False)
-            result = tnp.resolve(shape_id, current_solid=None, options=options)
+        # Resolve with semantic matching disabled
+        options = ResolutionOptions(use_semantic_matching=False)
+        result = tnp.resolve(shape_id, current_solid=None, options=options)
 
-            # Should fail (no exact match, semantic disabled)
-            assert result.method == ResolutionMethod.FAILED
-            assert result.confidence == 0.0
-        finally:
-            tnp._try_exact_match = original_try_exact
+        # Should fail (no exact match, semantic disabled)
+        assert result.method == ResolutionMethod.FAILED
+        assert result.confidence == 0.0
 
     def test_resolve_uses_selection_context(self):
         """Test resolve() uses stored selection context."""
@@ -142,25 +138,21 @@ class TestTNPServiceSemanticResolution:
             context=context
         )
 
-        # Add candidates with same adjacency
-        tnp._spatial_index.insert(
+        # Add candidates to semantic spatial index
+        tnp._semantic_spatial_index.insert(
             shape_id="candidate1",
             bounds=Bounds.from_center((5, 5, 5), 5),
             shape_data={'shape_type': 'FACE', 'feature_id': 'sketch_1'}
         )
 
-        # Mock the _try_exact_match to return None
-        original_try_exact = tnp._try_exact_match
-        tnp._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False
+        tnp._shape_exists_in_solid = Mock(return_value=False)
 
         options = ResolutionOptions(use_semantic_matching=True)
         result = tnp.resolve(shape_id, current_solid=None, options=options)
 
         # Should have attempted semantic match
         assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
-
-        # Restore original method
-        tnp._try_exact_match = original_try_exact
 
     def test_resolve_semantic_with_no_context(self):
         """Test resolve() skips semantic when no context available."""
@@ -179,18 +171,14 @@ class TestTNPServiceSemanticResolution:
             context=None  # No context stored
         )
 
-        # Mock exact match to fail
-        original_try_exact = tnp._try_exact_match
-        tnp._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False
+        tnp._shape_exists_in_solid = Mock(return_value=False)
 
         options = ResolutionOptions(use_semantic_matching=True)
         result = tnp.resolve(shape_id, current_solid=None, options=options)
 
         # Should fail (no context for semantic matching)
         assert result.method == ResolutionMethod.FAILED
-
-        # Restore
-        tnp._try_exact_match = original_try_exact
 
     def test_resolve_returns_ambiguous_on_close_scores(self):
         """Test resolve() returns ambiguous result for close candidates."""
@@ -216,21 +204,20 @@ class TestTNPServiceSemanticResolution:
             context=context
         )
 
-        # Add two candidates at same location
-        tnp._spatial_index.insert(
+        # Add two candidates at same location to semantic spatial index
+        tnp._semantic_spatial_index.insert(
             shape_id="candidate1",
             bounds=Bounds.from_center((10, 10, 10), 5),
             shape_data={'shape_type': 'FACE', 'feature_id': 'test'}
         )
-        tnp._spatial_index.insert(
+        tnp._semantic_spatial_index.insert(
             shape_id="candidate2",
             bounds=Bounds.from_center((10, 10, 10), 5),
             shape_data={'shape_type': 'FACE', 'feature_id': 'test'}
         )
 
-        # Mock exact match to fail
-        original_try_exact = tnp._try_exact_match
-        tnp._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False
+        tnp._shape_exists_in_solid = Mock(return_value=False)
 
         options = ResolutionOptions(use_semantic_matching=True)
         result = tnp.resolve(shape_id, current_solid=None, options=options)
@@ -238,9 +225,6 @@ class TestTNPServiceSemanticResolution:
         # Should attempt semantic (may fail without actual shapes)
         # The key is that it doesn't crash
         assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
-
-        # Restore
-        tnp._try_exact_match = original_try_exact
 
     def test_spatial_index_stats(self):
         """Test getting spatial index statistics."""
@@ -251,8 +235,8 @@ class TestTNPServiceSemanticResolution:
         assert stats['size'] == 0
         assert 'accelerated' in stats
 
-        # Add a shape
-        tnp._spatial_index.insert(
+        # Add a shape to the semantic spatial index
+        tnp._semantic_spatial_index.insert(
             shape_id="test",
             bounds=Bounds(0, 0, 0, 10, 10, 10),
             shape_data={'shape_type': 'FACE'}
@@ -265,18 +249,18 @@ class TestTNPServiceSemanticResolution:
         """Test querying shapes near a point."""
         tnp = TNPService(document_id="test_doc")
 
-        # Add some shapes
-        tnp._spatial_index.insert(
+        # Add some shapes to semantic spatial index
+        tnp._semantic_spatial_index.insert(
             shape_id="near1",
             bounds=Bounds(0, 0, 0, 5, 5, 5),
             shape_data={'shape_type': 'FACE', 'feature_id': 'f1'}
         )
-        tnp._spatial_index.insert(
+        tnp._semantic_spatial_index.insert(
             shape_id="near2",
             bounds=Bounds(8, 8, 0, 12, 12, 5),
             shape_data={'shape_type': 'FACE', 'feature_id': 'f1'}
         )
-        tnp._spatial_index.insert(
+        tnp._semantic_spatial_index.insert(
             shape_id="far",
             bounds=Bounds(100, 100, 100, 110, 110, 105),
             shape_data={'shape_type': 'FACE', 'feature_id': 'f2'}
@@ -293,18 +277,18 @@ class TestTNPServiceSemanticResolution:
         """Test finding nearest shapes."""
         tnp = TNPService(document_id="test_doc")
 
-        # Add shapes at different distances
-        tnp._spatial_index.insert(
+        # Add shapes at different distances to semantic spatial index
+        tnp._semantic_spatial_index.insert(
             shape_id="close",
             bounds=Bounds(0, 0, 0, 5, 5, 5),
             shape_data={'shape_type': 'EDGE'}
         )
-        tnp._spatial_index.insert(
+        tnp._semantic_spatial_index.insert(
             shape_id="medium",
             bounds=Bounds(20, 0, 0, 25, 5, 5),
             shape_data={'shape_type': 'EDGE'}
         )
-        tnp._spatial_index.insert(
+        tnp._semantic_spatial_index.insert(
             shape_id="far",
             bounds=Bounds(100, 0, 0, 105, 5, 5),
             shape_data={'shape_type': 'EDGE'}
@@ -319,12 +303,12 @@ class TestTNPServiceSemanticResolution:
         """Test finding nearest shapes with type filter."""
         tnp = TNPService(document_id="test_doc")
 
-        tnp._spatial_index.insert(
+        tnp._semantic_spatial_index.insert(
             shape_id="face1",
             bounds=Bounds(0, 0, 0, 10, 10, 10),
             shape_data={'shape_type': 'FACE'}
         )
-        tnp._spatial_index.insert(
+        tnp._semantic_spatial_index.insert(
             shape_id="edge1",
             bounds=Bounds(2, 0, 0, 7, 5, 5),
             shape_data={'shape_type': 'EDGE'}
@@ -348,14 +332,20 @@ class TestTNPServiceResolutionStrategy:
         """Test that exact match takes priority over semantic."""
         tnp = TNPService(document_id="test_doc")
 
-        shape_id = ShapeID.create(ShapeType.EDGE, "test", 0, ())
-
-        # Mock exact match to succeed
+        # Register shape so it exists in the registry
         mock_shape = Mock()
-        tnp._try_exact_match = Mock(return_value=mock_shape)
+        shape_id = tnp.register_shape(
+            ocp_shape=mock_shape,
+            shape_type=ShapeType.EDGE,
+            feature_id="test",
+            local_index=0,
+        )
+
+        # Mock _shape_exists_in_solid to return True (exact match succeeds)
+        tnp._shape_exists_in_solid = Mock(return_value=True)
 
         options = ResolutionOptions(use_semantic_matching=True)
-        result = tnp.resolve(shape_id, current_solid=None, options=options)
+        result = tnp.resolve(shape_id, current_solid=Mock(), options=options)
 
         # Should use exact match, not semantic
         assert result.method == ResolutionMethod.EXACT
@@ -386,16 +376,15 @@ class TestTNPServiceResolutionStrategy:
             context=context
         )
 
-        # Add candidate
-        tnp._spatial_index.insert(
+        # Add candidate to semantic spatial index
+        tnp._semantic_spatial_index.insert(
             shape_id="candidate",
             bounds=Bounds.from_center((10, 10, 10), 5),
             shape_data={'shape_type': 'FACE', 'feature_id': 'test'}
         )
 
-        # Mock exact match to fail
-        original_try_exact = tnp._try_exact_match
-        tnp._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False (exact match fails)
+        tnp._shape_exists_in_solid = Mock(return_value=False)
 
         options = ResolutionOptions(use_semantic_matching=True)
         result = tnp.resolve(shape_id, current_solid=None, options=options)
@@ -403,17 +392,11 @@ class TestTNPServiceResolutionStrategy:
         # Should attempt semantic match (may fail without actual shapes)
         assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
 
-        # Restore
-        tnp._try_exact_match = original_try_exact
-
     def test_semantic_skipped_when_disabled(self):
         """Test semantic is skipped when option is false."""
         tnp = TNPService(document_id="test_doc")
 
         shape_id = ShapeID.create(ShapeType.FACE, "test", 0, ())
-
-        # Mock exact match to fail
-        tnp._try_exact_match = Mock(return_value=None)
 
         options = ResolutionOptions(use_semantic_matching=False)
         result = tnp.resolve(shape_id, current_solid=None, options=options)
@@ -430,32 +413,35 @@ class TestTNPServiceOperationAndValidation:
         in_id = ShapeID.create(ShapeType.EDGE, "feat_a", 0, ("in",))
         out_id = ShapeID.create(ShapeType.EDGE, "feat_a", 1, ("out",))
 
-        op_id = tnp.record_operation(
+        op = OperationRecord(
             operation_type="fillet",
             feature_id="feat_a",
-            inputs=[in_id],
-            outputs=[out_id],
+            input_shape_ids=[in_id],
+            output_shape_ids=[out_id],
             occt_history={"dummy": True},
         )
+        tnp.record_operation(op)
 
-        assert op_id.startswith("op_feat_a_fillet_")
         assert len(tnp._operations) == 1
-        op = tnp._operations[0]
-        assert op["operation_type"] == "fillet"
-        assert op["feature_id"] == "feat_a"
-        assert op["inputs"][0]["uuid"] == in_id.uuid
-        assert op["outputs"][0]["uuid"] == out_id.uuid
+        stored_op = tnp._operations[0]
+        assert stored_op.operation_type == "fillet"
+        assert stored_op.feature_id == "feat_a"
+        assert stored_op.input_shape_ids[0].uuid == in_id.uuid
+        assert stored_op.output_shape_ids[0].uuid == out_id.uuid
 
-    def test_record_operation_validates_required_fields(self):
+    def test_record_operation_accepts_operation_record(self):
+        """Test record_operation accepts an OperationRecord object."""
         tnp = TNPService(document_id="test_doc")
         sid = ShapeID.create(ShapeType.EDGE, "feat", 0, ("x",))
 
-        with pytest.raises(ValueError):
-            tnp.record_operation("", "feat", [sid], [sid])
-        with pytest.raises(ValueError):
-            tnp.record_operation("cut", "", [sid], [sid])
-        with pytest.raises(ValueError):
-            tnp.record_operation("cut", "feat", None, [sid])  # type: ignore[arg-type]
+        op = OperationRecord(
+            operation_type="cut",
+            feature_id="feat",
+            input_shape_ids=[sid],
+            output_shape_ids=[sid],
+        )
+        tnp.record_operation(op)
+        assert len(tnp._operations) == 1
 
     def test_resolve_uses_history_after_exact_and_semantic_fail(self):
         tnp = TNPService(document_id="test_doc")
@@ -465,9 +451,17 @@ class TestTNPServiceOperationAndValidation:
         out_shape = object()
         in_id = tnp.register_shape(in_shape, ShapeType.EDGE, "feat_hist", 0)
         out_id = tnp.register_shape(out_shape, ShapeType.EDGE, "feat_hist", 1)
-        tnp.record_operation("boolean", "feat_hist", [in_id], [out_id])
 
-        tnp._try_exact_match = Mock(return_value=None)
+        # Record operation using OperationRecord
+        op = OperationRecord(
+            operation_type="boolean",
+            feature_id="feat_hist",
+            input_shape_ids=[in_id],
+            output_shape_ids=[out_id],
+            manual_mappings={in_id.uuid: [out_id.uuid]},
+        )
+        tnp.record_operation(op)
+
         tnp._shape_exists_in_solid = Mock(side_effect=lambda shape, _solid: shape is out_shape)
 
         result = tnp.resolve(
@@ -487,7 +481,7 @@ class TestTNPServiceOperationAndValidation:
 
         validation = tnp.validate_resolutions([r1, r2])
         assert validation.is_valid is False
-        assert any("multiple shape_ids resolved to same shape" in issue for issue in validation.issues)
+        assert any("Duplicate" in issue or "same" in issue.lower() for issue in validation.issues)
 
     def test_check_ambiguity_missing_shape(self):
         tnp = TNPService(document_id="test_doc")

@@ -36,7 +36,7 @@ for i, f in enumerate(faces):
 print(f'Target face index: {face_idx}, center: ({target_face.center().X:.2f}, {target_face.center().Y:.2f}, {target_face.center().Z:.2f})')
 
 # Register face shape ID
-from modeling.tnp_system import ShapeType
+from modeling.tnp_v5 import ShapeType
 fc = target_face.center()
 shape_id = doc._shape_naming_service.register_shape(
     ocp_shape=target_face.wrapped,

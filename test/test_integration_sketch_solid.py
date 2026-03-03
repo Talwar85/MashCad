@@ -26,7 +26,7 @@ from sketcher.constraints import (
 )
 from modeling import Body, Document
 from modeling.ocp_helpers import OCPExtrudeHelper, OCPFilletHelper, HAS_OCP
-from modeling.tnp_system import ShapeNamingService
+from modeling.tnp_v5 import ShapeNamingService
 
 
 # ============================================================================

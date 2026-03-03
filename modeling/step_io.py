@@ -405,7 +405,7 @@ class STEPReader:
             # TNP v4.0: ShapeID-Registrierung für importierte Solids
             if naming_service is not None and result.solids:
                 try:
-                    from modeling.tnp_system import ShapeType
+                    from modeling.tnp_v5 import ShapeType
 
                     registered_count = 0
                     for i, solid in enumerate(result.solids):

@@ -28,7 +28,7 @@ from modeling.tnp_v5.migration import (
     MigrationRollback,
     AutoMigration,
 )
-from modeling.tnp_system import (
+from modeling.tnp_v5 import (
     ShapeID as V4ShapeID,
     ShapeRecord as V4ShapeRecord,
     ShapeNamingService,
@@ -468,9 +468,9 @@ class TestMigrationEdgeCases:
 
         # Verify operation chain preserved
         ops = v5_service._operations
-        assert ops[0]['operation_type'] == 'extrude'
-        assert ops[1]['operation_type'] == 'fillet'
-        assert ops[2]['operation_type'] == 'boolean'
+        assert ops[0].operation_type == 'extrude'
+        assert ops[1].operation_type == 'fillet'
+        assert ops[2].operation_type == 'boolean'
 
 
 class TestMigrationValidation:
@@ -495,11 +495,12 @@ class TestMigrationValidation:
         v5_service = TNPService(document_id="test")
 
         # Add operation referencing non-existent shape
-        v5_service._operations.append({
-            'operation_type': 'test',
-            'inputs': [{'uuid': 'non-existent'}],
-            'outputs': []
-        })
+        from modeling.tnp_v5.history_mixin import OperationRecord
+        v5_service._operations.append(OperationRecord(
+            operation_type='test',
+            input_shape_ids=[{'uuid': 'non-existent'}],
+            output_shape_ids=[],
+        ))
 
         result = TNPMigration.validate_migration(v5_service)
 

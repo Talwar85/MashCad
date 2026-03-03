@@ -22,7 +22,7 @@ from modeling import (
 )
 from modeling.boolean_engine_v4 import BooleanEngineV4, VolumeCache
 from modeling.result_types import ResultStatus, BooleanResult
-from modeling.tnp_system import ShapeID, ShapeType
+from modeling.tnp_v5 import ShapeID, ShapeType
 
 
 # ============================================================================

@@ -22,7 +22,7 @@ from modeling import (
     DraftFeature, HollowFeature,
     PushPullFeature
 )
-from modeling.tnp_system import ShapeID, ShapeType
+from modeling.tnp_v5 import ShapeID, ShapeType
 from modeling.topology_indexing import edge_index_of, face_index_of
 from modeling.boolean_engine_v4 import BooleanEngineV4
 

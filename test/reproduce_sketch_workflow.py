@@ -7,7 +7,7 @@ from build123d import Solid, Face, Vector, Part
 from modeling import Body, ExtrudeFeature, PushPullFeature
 from modeling.features.fillet_chamfer import FilletFeature
 from modeling.ocp_helpers import HAS_OCP
-from modeling.tnp_system import ShapeID, ShapeType
+from modeling.tnp_v5 import ShapeID, ShapeType
 
 # Use existing test utils
 import sys

@@ -162,7 +162,7 @@ from modeling.ocp_helpers import (
 from modeling.boolean_engine_v4 import BooleanEngineV4
 
 # TNP System
-from modeling.tnp_system import (
+from modeling.tnp_v5 import (
     ShapeNamingService, ShapeID, ShapeType,
     OperationRecord
 )

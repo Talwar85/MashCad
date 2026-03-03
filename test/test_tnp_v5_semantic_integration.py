@@ -144,24 +144,20 @@ class TestExtrudeSemanticWorkflow:
         )
 
         # After boolean, the face still exists at same location
-        # Mock exact match fails (ocp_shape is different object)
-        original_try_exact = service._try_exact_match
-        service._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False (force exact match failure)
+        service._shape_exists_in_solid = Mock(return_value=False)
 
-        # Add candidate to spatial index
-        service._spatial_index.insert(
+        # Add candidate to semantic spatial index
+        service._semantic_spatial_index.insert(
             shape_id="new_face",
             bounds=Bounds.from_center((5, 5, 0), 5),
             shape_data={'shape_type': 'FACE', 'feature_id': 'extrude_1'}
         )
 
-        try:
-            result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=True))
+        result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=True))
 
-            # Should attempt semantic match
-            assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
-        finally:
-            service._try_exact_match = original_try_exact
+        # Should attempt semantic match
+        assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
 
     def test_extrude_ambiguous_faces(self):
         """Test handling ambiguous extrude faces (multiple profiles at same location)."""
@@ -274,24 +270,20 @@ class TestFilletSemanticWorkflow:
         )
 
         # After fillet, the sharp edge is gone, replaced by blend edges
-        # Mock exact match fails
-        original_try_exact = service._try_exact_match
-        service._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False
+        service._shape_exists_in_solid = Mock(return_value=False)
 
         # Add candidate blend edges near original location
-        service._spatial_index.insert(
+        service._semantic_spatial_index.insert(
             shape_id="blend_edge1",
             bounds=Bounds.from_center((5, 5, 5), 2),
             shape_data={'shape_type': 'EDGE', 'feature_id': 'fillet_1'}
         )
 
-        try:
-            result = service.resolve(edge_id, None, ResolutionOptions(use_semantic_matching=True))
+        result = service.resolve(edge_id, None, ResolutionOptions(use_semantic_matching=True))
 
-            # Should attempt semantic match
-            assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
-        finally:
-            service._try_exact_match = original_try_exact
+        # Should attempt semantic match
+        assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
 
 
 class TestBooleanSemanticWorkflow:
@@ -322,16 +314,14 @@ class TestBooleanSemanticWorkflow:
         )
 
         # After cut, this face no longer exists
-        original_try_exact = service._try_exact_match
-        service._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to return False
+        service._shape_exists_in_solid = Mock(return_value=False)
 
         # No spatial candidates either
         result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=False))
 
         assert result.method == ResolutionMethod.FAILED
         assert result.confidence == 0.0
-
-        service._try_exact_match = original_try_exact
 
     def test_boolean_join_face_modification(self):
         """Test handling modified face in join operation."""
@@ -351,22 +341,19 @@ class TestBooleanSemanticWorkflow:
 
         # After join, face is modified but at similar location
         # Add candidate at nearby location
-        service._spatial_index.insert(
+        service._semantic_spatial_index.insert(
             shape_id="modified_face",
             bounds=Bounds.from_center((10, 10, 0.5), 10.0),  # Slight offset
             shape_data={'shape_type': 'FACE', 'feature_id': 'base'}
         )
 
-        original_try_exact = service._try_exact_match
-        service._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to force exact match failure
+        service._shape_exists_in_solid = Mock(return_value=False)
 
-        try:
-            result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=True))
+        result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=True))
 
-            # Should use semantic match (location-based)
-            assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
-        finally:
-            service._try_exact_match = original_try_exact
+        # Should use semantic match (location-based)
+        assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
 
     def test_boolean_transformation_tracking(self):
         """Test transformation map for boolean operations."""
@@ -779,32 +766,27 @@ class TestSemanticResolutionPerformance:
             context=context
         )
 
-        # Mock exact match to fail
-        original_try_exact = service._try_exact_match
-        service._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to force exact match failure
+        service._shape_exists_in_solid = Mock(return_value=False)
 
         import time
         start = time.perf_counter()
 
         # Add many candidates to test performance
         for i in range(100):
-            service._spatial_index.insert(
+            service._semantic_spatial_index.insert(
                 shape_id=f"candidate_{i}",
                 bounds=Bounds.from_center((0, 0, 0), 100),
                 shape_data={'shape_type': 'FACE', 'feature_id': 'perf_test'}
             )
 
-        try:
-            # Resolution should still complete quickly
-            result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=True))
+        # Resolution should still complete quickly
+        result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=True))
 
-            elapsed = time.perf_counter() - start
+        elapsed = time.perf_counter() - start
 
-            # Should complete in under 100ms even with 100 candidates
-            assert elapsed < 0.1  # 100ms threshold
-
-        finally:
-            service._try_exact_match = original_try_exact
+        # Should complete in under 100ms even with 100 candidates
+        assert elapsed < 0.1  # 100ms threshold
 
     def test_empty_context_graceful_handling(self):
         """Test graceful handling when no context is available."""
@@ -822,19 +804,14 @@ class TestSemanticResolutionPerformance:
             context=None  # No context!
         )
 
-        # Mock exact match to fail
-        original_try_exact = service._try_exact_match
-        service._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to force exact match failure
+        service._shape_exists_in_solid = Mock(return_value=False)
 
-        try:
-            # Should not crash, just fail gracefully
-            result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=True))
+        # Should not crash, just fail gracefully
+        result = service.resolve(face_id, None, ResolutionOptions(use_semantic_matching=True))
 
-            assert result.method == ResolutionMethod.FAILED
-            assert result.confidence == 0.0
-
-        finally:
-            service._try_exact_match = original_try_exact
+        assert result.method == ResolutionMethod.FAILED
+        assert result.confidence == 0.0
 
 
 # =============================================================================

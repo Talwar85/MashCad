@@ -151,7 +151,7 @@ class BodySnapshot:
                     if service is None:
                         return False
 
-                    from modeling.tnp_system import ShapeID, ShapeType, OperationRecord
+                    from modeling.tnp_v5 import ShapeID, ShapeType, OperationRecord
                     from loguru import logger
 
                     # Service leeren
@@ -172,7 +172,7 @@ class BodySnapshot:
                             geometry_hash=sid_data['geometry_hash'],
                             timestamp=sid_data['timestamp'],
                         )
-                        from modeling.tnp_system import ShapeRecord
+                        from modeling.tnp_v5 import ShapeRecord
                         record = ShapeRecord(
                             shape_id=shape_id,
                             ocp_shape=None,  # Wird bei Bedarf neu aufgelöst

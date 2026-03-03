@@ -12,7 +12,7 @@ from build123d import Box, Location
 from modeling import Body, Document, ExtrudeFeature, FilletFeature, PrimitiveFeature
 from modeling.performance_benchmark import BenchmarkTimer
 from modeling.topology_indexing import edge_index_of, face_index_of
-from modeling.tnp_system import ShapeType
+from modeling.tnp_v5 import ShapeType
 
 
 def _make_imported_box_body(name: str, size: float, offset_x: float = 0.0) -> Body:

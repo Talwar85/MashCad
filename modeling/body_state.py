@@ -69,7 +69,7 @@ def deserialize_shape_id(sid_data: dict, default_shape_type: str = "FACE"):
     if not isinstance(sid_data, dict):
         return None
     
-    from modeling.tnp_system import ShapeID, ShapeType
+    from modeling.tnp_v5 import ShapeID, ShapeType
     
     shape_type = ShapeType[sid_data.get("shape_type", default_shape_type)]
     local_index = int(sid_data.get("local_index", sid_data.get("local_id", 0)))

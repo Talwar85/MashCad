@@ -668,7 +668,7 @@ class DialogMixin:
         try:
             if not hasattr(face, "wrapped"):
                 return None
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
 
             fc = face.center()
             area = float(face.area) if hasattr(face, "area") else 0.0
@@ -1747,7 +1747,7 @@ class DialogMixin:
 
         from modeling import NSidedPatchFeature
         from modeling.geometric_selector import GeometricEdgeSelector
-        from modeling.tnp_system import ShapeType
+        from modeling.tnp_v5 import ShapeType
         from gui.commands.feature_commands import AddFeatureCommand
 
         geometric_selectors = []

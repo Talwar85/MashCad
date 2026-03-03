@@ -140,7 +140,7 @@ class BodyComputeMixin:
                 feature_id = getattr(feature, 'id', None) or str(id(feature))
 
                 # Alle Faces registrieren
-                from modeling.tnp_system import ShapeType
+                from modeling.tnp_v5 import ShapeType
                 from OCP.TopExp import TopExp_Explorer
                 from OCP.TopAbs import TopAbs_FACE
 

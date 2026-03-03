@@ -177,10 +177,10 @@ class TestMigrateServiceV4ToV5:
         assert len(v5_service._operations) == 1
 
         op_data = v5_service._operations[0]
-        assert op_data['operation_type'] == 'extrude'
-        assert op_data['feature_id'] == 'extrude_1'
-        assert len(op_data['inputs']) == 1
-        assert op_data['inputs'][0]['uuid'] == 'input-1'
+        assert op_data.operation_type == 'extrude'
+        assert op_data.feature_id == 'extrude_1'
+        assert len(op_data.input_shape_ids) == 1
+        assert op_data.input_shape_ids[0]['uuid'] == 'input-1'
 
 
 class TestValidateMigration:
@@ -230,11 +230,12 @@ class TestValidateMigration:
         v5_service = TNPService(document_id="test_doc")
 
         # Add an operation with orphaned reference
-        v5_service._operations.append({
-            'operation_type': 'test',
-            'inputs': [{'uuid': 'nonexistent'}],
-            'outputs': []
-        })
+        from modeling.tnp_v5.history_mixin import OperationRecord
+        v5_service._operations.append(OperationRecord(
+            operation_type='test',
+            input_shape_ids=[{'uuid': 'nonexistent'}],
+            output_shape_ids=[],
+        ))
 
         result = TNPMigration.validate_migration(v5_service)
 

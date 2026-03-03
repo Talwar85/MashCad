@@ -84,7 +84,7 @@ from modeling.feature_dependency import FeatureDependencyGraph, get_dependency_g
 from modeling.boolean_engine_v4 import BooleanEngineV4
 
 # TNP v4.0
-from modeling.tnp_system import (
+from modeling.tnp_v5 import (
     ShapeNamingService, ShapeID, ShapeType,
     OperationRecord
 )
@@ -669,7 +669,7 @@ class Body(BodyRebuildMixin, BodyResolveMixin, BodyExtrudeMixin, BodyComputeMixi
                                 from OCP.TopTools import TopTools_IndexedMapOfShape
                                 from OCP.TopExp import TopExp
                                 from OCP.TopoDS import TopoDS
-                                from modeling.tnp_system import ShapeType
+                                from modeling.tnp_v5 import ShapeType
 
                                 face_map = TopTools_IndexedMapOfShape()
                                 TopExp.MapShapes_s(solid.wrapped, TopAbs_FACE, face_map)

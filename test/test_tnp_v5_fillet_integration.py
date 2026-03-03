@@ -418,16 +418,12 @@ class TestFilletIntegrationWorkflow:
         feature = FilletFeature()
         store_fillet_data_in_feature(feature, edge_ids)
 
-        # Mock exact match failure
-        original_try_exact = service._try_exact_match
-        service._try_exact_match = Mock(return_value=None)
+        # Mock _shape_exists_in_solid to force exact match failure
+        service._shape_exists_in_solid = Mock(return_value=False)
 
-        try:
-            # Resolve (should use semantic)
-            from modeling.tnp_v5.types import ResolutionOptions, ResolutionMethod
-            result = service.resolve(edge_ids[0], None, ResolutionOptions(use_semantic_matching=True))
+        # Resolve (should use semantic)
+        from modeling.tnp_v5.types import ResolutionOptions, ResolutionMethod
+        result = service.resolve(edge_ids[0], None, ResolutionOptions(use_semantic_matching=True))
 
-            # Should have attempted semantic match
-            assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)
-        finally:
-            service._try_exact_match = original_try_exact
+        # Should have attempted semantic match
+        assert result.method in (ResolutionMethod.SEMANTIC, ResolutionMethod.FAILED)

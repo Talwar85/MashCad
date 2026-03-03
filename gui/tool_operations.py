@@ -673,7 +673,7 @@ class ToolMixin:
         try:
             from gui.commands.feature_commands import AddFeatureCommand
             from modeling.geometric_selector import create_geometric_selectors_from_edges
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
 
             selected_edge_indices = []
             if hasattr(self.viewport_3d, "get_selected_edge_topology_indices"):

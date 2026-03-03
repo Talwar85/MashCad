@@ -20,7 +20,7 @@ from modeling import (
     FeatureType
 )
 from modeling.brepfeat_operations import brepfeat_prism
-from modeling.tnp_system import ShapeID, ShapeType
+from modeling.tnp_v5 import ShapeID, ShapeType
 from modeling.topology_indexing import face_index_of
 
 

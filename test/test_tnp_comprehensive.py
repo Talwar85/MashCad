@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 
 def test_shape_lifecycle():
     """Testet den kompletten Lebenszyklus einer ShapeID."""
-    from modeling.tnp_system import ShapeNamingService, ShapeID, ShapeType, ShapeRecord
+    from modeling.tnp_v5 import ShapeNamingService, ShapeID, ShapeType, ShapeRecord
     from build123d import Box
 
     print("\n[Test] Shape Lebenszyklus")
@@ -66,7 +66,7 @@ def test_shape_lifecycle():
 
 def test_boolean_with_tnp():
     """Testet Boolean-Operationen mit TNP-Tracking."""
-    from modeling.tnp_system import ShapeNamingService
+    from modeling.tnp_v5 import ShapeNamingService
     from modeling.boolean_engine_v4 import BooleanEngineV4
     from modeling.result_types import BooleanResult
     from build123d import Box
@@ -107,7 +107,7 @@ def test_boolean_with_tnp():
 
 def test_extrude_tnp_chain():
     """Testet die Extrude-TNP-Kette."""
-    from modeling.tnp_system import ShapeNamingService, ShapeType
+    from modeling.tnp_v5 import ShapeNamingService, ShapeType
     from modeling.ocp_helpers import OCPExtrudeHelper
     from build123d import Face, Vector
     import math
@@ -160,7 +160,7 @@ def test_extrude_tnp_chain():
 
 def test_fillet_then_chamfer_chain():
     """Testet Fillet → Chamfer Kette mit TNP."""
-    from modeling.tnp_system import ShapeNamingService
+    from modeling.tnp_v5 import ShapeNamingService
     from modeling.ocp_helpers import OCPFilletHelper, OCPChamferHelper
     from build123d import Box
 
@@ -248,7 +248,7 @@ def test_fillet_then_chamfer_chain():
 
 def test_shape_reference_resolution():
     """Testet die ShapeReference-Auflösung über Transformationen hinweg."""
-    from modeling.tnp_system import ShapeNamingService, ShapeID, ShapeType, ShapeRecord
+    from modeling.tnp_v5 import ShapeNamingService, ShapeID, ShapeType, ShapeRecord
     from build123d import Box, Vector
 
     print("\n[Test] ShapeReference Auflösung")
@@ -294,7 +294,7 @@ def test_shape_reference_resolution():
 
 def test_compact_operations():
     """Testet die Compact-Funktion zum Aufräumen stale Shapes."""
-    from modeling.tnp_system import ShapeNamingService
+    from modeling.tnp_v5 import ShapeNamingService
     from build123d import Box
 
     print("\n[Test] Compact Operations")
@@ -336,7 +336,7 @@ def test_compact_operations():
 
 def test_health_report_comprehensive():
     """Testet den Health-Report mit verschiedenen Feature-Typen."""
-    from modeling.tnp_system import ShapeNamingService, ShapeID, ShapeType
+    from modeling.tnp_v5 import ShapeNamingService, ShapeID, ShapeType
     from build123d import Box
 
     print("\n[Test] Health Report Comprehensive")
@@ -401,7 +401,7 @@ def test_health_report_comprehensive():
 
 def test_serialization_roundtrip():
     """Testet ShapeID Serialisierung/Deserialisierung."""
-    from modeling.tnp_system import ShapeID, ShapeType
+    from modeling.tnp_v5 import ShapeID, ShapeType
 
     print("\n[Test] ShapeID Serialisierung Roundtrip")
 
@@ -454,7 +454,7 @@ def test_serialization_roundtrip():
 
 def test_registry_performance():
     """Testet die Performance der Registry bei vielen Shapes."""
-    from modeling.tnp_system import ShapeNamingService
+    from modeling.tnp_v5 import ShapeNamingService
     from build123d import Box
     import time
 

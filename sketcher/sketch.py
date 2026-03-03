@@ -190,7 +190,7 @@ class Sketch:
     
     def add_point(self, x: float, y: float, construction: bool = False) -> Point2D:
         """Fügt einen standalone Punkt hinzu"""
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         import uuid
 
         point = Point2D(x, y, construction=construction, standalone=True)
@@ -213,7 +213,7 @@ class Sketch:
     def add_line(self, x1: float, y1: float, x2: float, y2: float,
                  construction: bool = False, tolerance: float = 1.0) -> Line2D:
         """Fügt eine Linie hinzu. Verwendet existierende Punkte wenn möglich."""
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         import uuid
 
         # Prüfe ob es schon Punkte an diesen Positionen gibt
@@ -276,7 +276,7 @@ class Sketch:
 
         TNP v4.1: Speichert native OCP Daten für optimale Extrusion (3 Faces statt 14+).
         """
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         import uuid
 
         self.normalize_plane_basis()
@@ -322,7 +322,7 @@ class Sketch:
         Arcs werden direkt als native OCP Arc Faces extrudiert
         statt als Polygon-Approximation.
         """
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         import uuid
 
         self.normalize_plane_basis()
@@ -382,7 +382,7 @@ class Sketch:
         Returns:
             Ellipse2D: Die erstellte native Ellipse
         """
-        from modeling.tnp_system import ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeID, ShapeType
         import uuid
         
         self.normalize_plane_basis()

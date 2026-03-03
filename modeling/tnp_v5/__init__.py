@@ -23,7 +23,13 @@ from .types import (
     ResolutionOptions,
 )
 
-from .service import TNPService
+from .service import TNPService, ShapeNamingService
+
+# Mixin exports
+from .registry_mixin import RegistryMixin
+from .resolution_mixin import ResolutionMixin, ValidationResult
+from .history_mixin import HistoryMixin, OperationRecord
+from .lookup_mixin import LookupMixin
 
 # Phase 2 exports
 from .spatial import (
@@ -99,6 +105,13 @@ __all__ = [
     "ResolutionMethod",
     "ResolutionOptions",
     "TNPService",
+    "ShapeNamingService",
+    "OperationRecord",
+    "ValidationResult",
+    "RegistryMixin",
+    "ResolutionMixin",
+    "HistoryMixin",
+    "LookupMixin",
     # Phase 2
     "SpatialIndex",
     "Bounds",

@@ -3,7 +3,7 @@ from typing import Optional, Any, Tuple
 from .base import Feature, FeatureType
 import sketcher
 from sketcher import Sketch
-from modeling.tnp_system import ShapeID
+from modeling.tnp_v5 import ShapeID
 
 @dataclass
 class ExtrudeFeature(Feature):

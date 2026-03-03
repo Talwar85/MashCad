@@ -73,7 +73,7 @@ class Document:
         self.active_sketch: Optional[Sketch] = None
         
         # TNP v4.0: Shape Naming Service für persistente Shape-Referenzen
-        from modeling.tnp_system import ShapeNamingService
+        from modeling.tnp_v5 import ShapeNamingService
         self._shape_naming_service = ShapeNamingService(name)
         self._tnp_v5_service = self._shape_naming_service
         if is_enabled("tnp_debug_logging"):
@@ -709,7 +709,7 @@ class Document:
 
         try:
             from modeling.geometric_selector import GeometricEdgeSelector
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
         except Exception:
             return 0
 
@@ -1021,7 +1021,7 @@ class Document:
 
         try:
             from modeling.topology_indexing import edge_from_index
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
         except Exception:
             return 0
 
@@ -1113,7 +1113,7 @@ class Document:
 
         try:
             from modeling.topology_indexing import face_from_index
-            from modeling.tnp_system import ShapeType
+            from modeling.tnp_v5 import ShapeType
         except Exception:
             return 0
 

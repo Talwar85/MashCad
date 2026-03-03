@@ -4,7 +4,7 @@ from enum import Enum
 from loguru import logger
 from .base import Feature, FeatureType
 from modeling.nurbs import ContinuityMode
-from modeling.tnp_system import ShapeID
+from modeling.tnp_v5 import ShapeID
 
 
 def _canonicalize_indices(indices):

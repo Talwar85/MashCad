@@ -4,7 +4,7 @@ import pytest
 
 from modeling import Body, Document, ExtrudeFeature, PrimitiveFeature
 from modeling.topology_indexing import face_index_of
-from modeling.tnp_system import ShapeType
+from modeling.tnp_v5 import ShapeType
 
 _AXIS_DIRECTIONS = (
     (1.0, 0.0, 0.0),

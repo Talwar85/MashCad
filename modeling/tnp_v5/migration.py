@@ -1,7 +1,9 @@
 """
-TNP v5.0 - Migration Utilities
+TNP v5.0 - Migration Utilities (DEPRECATED)
 
 Utilities for migrating from TNP v4.0 to v5.0.
+v4.0 wurde vollständig entfernt. Dieses Modul existiert nur noch
+für bestehende Tests und wird in einer zukünftigen Version gelöscht.
 """
 
 from typing import Dict, List, Optional, Any, Set
@@ -11,6 +13,7 @@ import time
 from uuid import uuid4
 
 from .types import ShapeID, ShapeRecord, ShapeType
+from .history_mixin import OperationRecord
 from .service import TNPService
 
 
@@ -147,11 +150,15 @@ class TNPMigration:
                             out_dict = {'uuid': str(out)}
                         outputs.append(out_dict)
 
-                    op_data['inputs'] = inputs
-                    op_data['outputs'] = outputs
+                    op_record = OperationRecord(
+                        operation_type=op_data['operation_type'],
+                        feature_id=op_data['feature_id'],
+                        input_shape_ids=inputs,
+                        output_shape_ids=outputs,
+                    )
+                    op_record.timestamp = op_data.get('timestamp', 0)
 
-                    # Store in v5 service (placeholder)
-                    v5_service._operations.append(op_data)
+                    v5_service._operations.append(op_record)
 
                 except Exception as e:
                     logger.warning(f"[TNP Migration] Failed to migrate operation: {e}")
@@ -204,20 +211,21 @@ class TNPMigration:
             shape_uuids = set(v5_service._shapes.keys())
 
             for op in v5_service._operations:
-                if isinstance(op, dict):
-                    # Check inputs
-                    for inp in op.get('inputs', []):
-                        if isinstance(inp, dict):
-                            inp_uuid = inp.get('uuid')
-                            if inp_uuid and inp_uuid not in shape_uuids:
-                                issues.append(f"Orphaned input reference: {inp_uuid}")
+                if not isinstance(op, OperationRecord):
+                    issues.append(f"Operation is {type(op).__name__}, expected OperationRecord")
+                    continue
 
-                    # Check outputs
-                    for out in op.get('outputs', []):
-                        if isinstance(out, dict):
-                            out_uuid = out.get('uuid')
-                            if out_uuid and out_uuid not in shape_uuids:
-                                issues.append(f"Orphaned output reference: {out_uuid}")
+                # Check inputs
+                for inp in op.input_shape_ids:
+                    inp_uuid = inp.get('uuid') if isinstance(inp, dict) else getattr(inp, 'uuid', str(inp))
+                    if inp_uuid and inp_uuid not in shape_uuids:
+                        issues.append(f"Orphaned input reference: {inp_uuid}")
+
+                # Check outputs
+                for out in op.output_shape_ids:
+                    out_uuid = out.get('uuid') if isinstance(out, dict) else getattr(out, 'uuid', str(out))
+                    if out_uuid and out_uuid not in shape_uuids:
+                        issues.append(f"Orphaned output reference: {out_uuid}")
 
             # Check feature buckets consistency
             for feature_id, shape_ids in v5_service._by_feature.items():
@@ -277,10 +285,11 @@ class TNPMigration:
         try:
             from .spatial import Bounds, compute_bounds_from_signature
 
-            # Clear existing spatial index
-            v5_service._spatial_index._bounds.clear()
-            v5_service._spatial_index._shapes.clear()
-            v5_service._spatial_index._count = 0
+            # Rebuild the semantic spatial index
+            spatial_index = v5_service._semantic_spatial_index
+            spatial_index._bounds.clear()
+            spatial_index._shapes.clear()
+            spatial_index._count = 0
 
             inserted = 0
 
@@ -299,7 +308,7 @@ class TNPMigration:
                     continue
 
                 # Insert using SpatialIndex.insert() API
-                v5_service._spatial_index.insert(
+                spatial_index.insert(
                     shape_id=uuid,
                     bounds=bounds,
                     shape_data={
@@ -566,8 +575,8 @@ class MigrationRollback:
                 return False
 
             # Import v4.0 types
-            from modeling.tnp_system import ShapeID as V4ShapeID, ShapeRecord as V4ShapeRecord
-            from modeling.tnp_system import OperationRecord as V4OperationRecord, ShapeType as V4ShapeType
+            from modeling.tnp_v5 import ShapeID as V4ShapeID, ShapeRecord as V4ShapeRecord
+            from modeling.tnp_v5 import OperationRecord as V4OperationRecord, ShapeType as V4ShapeType
 
             # Clear existing data
             v4_service._shapes.clear()

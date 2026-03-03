@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 def test_fillet_history_tracking():
     """Testet Fillet History-Tracking im TNP-System."""
     try:
-        from modeling.tnp_system import ShapeNamingService, ShapeType, ShapeID
+        from modeling.tnp_v5 import ShapeNamingService, ShapeType, ShapeID
         from build123d import Box, Solid, Edge
         from modeling.ocp_helpers import OCPFilletHelper
 
@@ -93,7 +93,7 @@ def test_fillet_history_tracking():
 def test_chamfer_history_tracking():
     """Testet Chamfer History-Tracking im TNP-System."""
     try:
-        from modeling.tnp_system import ShapeNamingService, ShapeType, ShapeID
+        from modeling.tnp_v5 import ShapeNamingService, ShapeType, ShapeID
         from build123d import Box
         from modeling.ocp_helpers import OCPChamferHelper
 
@@ -164,7 +164,7 @@ def test_body_transaction_tnp():
     """Testet TNP-Integration in BodyTransaction."""
     try:
         from modeling.body_transaction import BodyTransaction, BodySnapshot
-        from modeling.tnp_system import ShapeNamingService, ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeNamingService, ShapeID, ShapeType
         from build123d import Box
 
         # Mock Body-Klasse
@@ -215,7 +215,7 @@ def test_body_transaction_tnp():
 
                 # TNP Service ändern
                 service = body._document._shape_naming_service
-                from modeling.tnp_system import ShapeRecord
+                from modeling.tnp_v5 import ShapeRecord
                 record = ShapeRecord(
                     shape_id=ShapeID.create(
                         shape_type=ShapeType.EDGE,
@@ -274,7 +274,7 @@ def test_import_tnp_registration():
     """Testet TNP-Registrierung bei STEP-Import."""
     try:
         from modeling.step_io import STEPReader
-        from modeling.tnp_system import ShapeNamingService
+        from modeling.tnp_v5 import ShapeNamingService
         from build123d import Box
 
         # Service erstellen
@@ -296,7 +296,7 @@ def test_import_tnp_registration():
                 print(f"  ✓ Import TNP: {count} Edges für {feature_id} registriert")
             except Exception as e:
                 # Fallback: Direkte Registrierung
-                from modeling.tnp_system import ShapeType
+                from modeling.tnp_v5 import ShapeType
                 try:
                     ocp_shape = solid.wrapped if hasattr(solid, 'wrapped') else solid
                     service.register_shape(ocp_shape, ShapeType.SOLID, feature_id, 0)
@@ -324,7 +324,7 @@ def test_import_tnp_registration():
 def test_tnp_health_report():
     """Testet den TNP Health-Report."""
     try:
-        from modeling.tnp_system import ShapeNamingService, ShapeID, ShapeType
+        from modeling.tnp_v5 import ShapeNamingService, ShapeID, ShapeType
         from build123d import Box
 
         # Service erstellen

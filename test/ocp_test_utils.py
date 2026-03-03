@@ -16,7 +16,7 @@ from build123d import (
     Solid, Face, Edge, Wire, Vector, Box
     # Plane, Sketch, Rectangle werden nicht mehr verwendet
 )
-from modeling.tnp_system import ShapeNamingService, ShapeType
+from modeling.tnp_v5 import ShapeNamingService, ShapeType
 from config.feature_flags import set_flag, is_enabled
 
 
