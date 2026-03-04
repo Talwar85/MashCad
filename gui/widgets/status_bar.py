@@ -4,7 +4,7 @@ Moderne Statusleiste nach Figma-Design mit Koordinaten, Tool-Info, Grid und Zoom
 """
 
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame, QMenu
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from gui.design_tokens import DesignTokens
 from i18n import tr
 
@@ -144,6 +144,12 @@ class MashCadStatusBar(QWidget):
         self.strict_badge.setVisible(False)
         layout.addWidget(self.strict_badge)
 
+        # Error hold timer: prevents immediate reset to "Bereit" after error
+        self._error_hold_active = False
+        self._error_hold_timer = QTimer(self)
+        self._error_hold_timer.setSingleShot(True)
+        self._error_hold_timer.timeout.connect(self._clear_error_hold)
+
     def _create_separator(self):
         """Erstellt einen vertikalen Separator."""
         sep = QFrame()
@@ -191,6 +197,7 @@ class MashCadStatusBar(QWidget):
         Setzt den Status-Text und -Farbe.
 
         W9 Paket D: Error UX v2 - Unterstützt status_class/severity aus Error-Envelope v2.
+        Error states are held for 5 seconds before allowing reset to "Bereit".
 
         Args:
             status: Der Status-Text
@@ -198,24 +205,38 @@ class MashCadStatusBar(QWidget):
             status_class: status_class aus Error-Envelope v2 (WARNING_RECOVERABLE, BLOCKED, CRITICAL, ERROR)
             severity: severity aus Error-Envelope v2 (warning, blocked, critical, error)
         """
+        is_error_state = (
+            is_error
+            or status_class in ("ERROR", "CRITICAL", "BLOCKED")
+            or severity in ("error", "critical", "blocked")
+        )
+
+        # Block "Bereit" reset while error hold is active
+        if self._error_hold_active and not is_error_state and status in ("Bereit", "Ready"):
+            return
+
         self.status_text.setText(status)
+
+        # Start error hold timer on error states
+        if is_error_state:
+            self._error_hold_active = True
+            self._error_hold_timer.start(5000)  # Hold for 5 seconds
 
         # W9: Priorisiere status_class/severity über legacy is_error
         if status_class == "WARNING_RECOVERABLE" or severity == "warning":
-            # Gelb für Recoverable Warnings
-            self.status_dot.setStyleSheet(f"color: #eab308; font-size: 10px;")  # Gelb
+            self.status_dot.setStyleSheet(f"color: #eab308; font-size: 10px;")
         elif status_class == "BLOCKED" or severity == "blocked":
-            # Orange für Blocked
-            self.status_dot.setStyleSheet(f"color: #f97316; font-size: 10px;")  # Orange
+            self.status_dot.setStyleSheet(f"color: #f97316; font-size: 10px;")
         elif status_class == "CRITICAL" or severity == "critical":
-            # Rot für Critical
             self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_ERROR.name()}; font-size: 10px;")
         elif status_class == "ERROR" or severity == "error" or is_error:
-            # Rot für Error
             self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_ERROR.name()}; font-size: 10px;")
         else:
-            # Grün für Success/Ready
             self.status_dot.setStyleSheet(f"color: {DesignTokens.COLOR_SUCCESS.name()}; font-size: 10px;")
+
+    def _clear_error_hold(self):
+        """Clear the error hold, allowing status to be reset to Bereit."""
+        self._error_hold_active = False
 
     def set_grid(self, grid_size: float):
         """Setzt die Grid-Anzeige."""

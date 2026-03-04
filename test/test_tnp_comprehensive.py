@@ -61,7 +61,6 @@ def test_shape_lifecycle():
     print(f"  3. Invalidiert: {stats['total_shapes']} -> {stats_after['total_shapes']} Shapes")
 
     print("  ✓ Shape Lebenszyklus erfolgreich")
-    return True
 
 
 def test_boolean_with_tnp():
@@ -99,10 +98,8 @@ def test_boolean_with_tnp():
 
         assert after_count > base_count, "Keine neuen Shapes nach Boolean"
         print("  ✓ Boolean mit TNP erfolgreich")
-        return True
     else:
-        print(f"  ! Boolean fehlgeschlagen: {result.message}")
-        return False
+        pytest.fail(f"Boolean fehlgeschlagen: {result.message}")
 
 
 def test_extrude_tnp_chain():
@@ -116,46 +113,38 @@ def test_extrude_tnp_chain():
 
     service = ShapeNamingService()
 
-    try:
-        # 1. Direkte Face-Erstellung (ohne Sketch)
-        # Erstelle eine rechteckige Face durch Extrusion einer Wire
-        from build123d import Wire, Edge, Plane
+    # 1. Direkte Face-Erstellung (ohne Sketch)
+    # Erstelle eine rechteckige Face durch Extrusion einer Wire
+    from build123d import Wire, Edge, Plane
 
-        # Erstelle ein Rechteck als Wire
-        wire = Wire.make_rect(0, 0, 10, 10)
+    # Erstelle ein Rechteck als Wire (width, height)
+    wire = Wire.make_rect(10, 10)
 
-        # Erstelle eine Face vom Wire
-        face = Face(wire)
+    # Erstelle eine Face vom Wire
+    face = Face(wire)
 
-        # 2. Extrudieren mit TNP
-        result = OCPExtrudeHelper.extrude(
-            face=face,
-            direction=Vector(0, 0, 1),
-            distance=5.0,
-            naming_service=service,
-            feature_id="extrude_test"
-        )
+    # 2. Extrudieren mit TNP
+    result = OCPExtrudeHelper.extrude(
+        face=face,
+        direction=Vector(0, 0, 1),
+        distance=5.0,
+        naming_service=service,
+        feature_id="extrude_test"
+    )
 
-        assert result is not None, "Extrude Ergebnis ist None"
+    assert result is not None, "Extrude Ergebnis ist None"
 
-        # 3. Prüfen ob Shapes registriert wurden
-        stats = service.get_stats()
-        assert stats['total_shapes'] > 0, "Keine Shapes nach Extrude"
+    # 3. Prüfen ob Shapes registriert wurden
+    stats = service.get_stats()
+    assert stats['total_shapes'] > 0, "Keine Shapes nach Extrude"
 
-        # 4. Prüfe ob OperationRecord erstellt wurde
-        op = service.get_last_operation()
-        if op is not None:
-            assert op.operation_type in ("EXTRUDE", "BREPFEAT_PRISM"), f"Ungültiger Operation-Typ: {op.operation_type}"
-            print(f"  Operation: {op.operation_type}, {len(op.output_shape_ids)} Outputs")
+    # 4. Prüfe ob OperationRecord erstellt wurde
+    op = service.get_last_operation()
+    if op is not None:
+        assert op.operation_type in ("EXTRUDE", "BREPFEAT_PRISM"), f"Ungültiger Operation-Typ: {op.operation_type}"
+        print(f"  Operation: {op.operation_type}, {len(op.output_shape_ids)} Outputs")
 
-        print(f"  ✓ Extrude TNP: {stats['total_shapes']} Shapes registriert")
-        return True
-
-    except Exception as e:
-        print(f"  ✗ Extrude TNP fehlgeschlagen: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    print(f"  ✓ Extrude TNP: {stats['total_shapes']} Shapes registriert")
 
 
 def test_fillet_then_chamfer_chain():
@@ -168,82 +157,59 @@ def test_fillet_then_chamfer_chain():
 
     service = ShapeNamingService()
 
-    try:
-        # 1. Basis-Block
-        box = Box(20, 20, 20)
-        solid = box
+    # 1. Basis-Block
+    box = Box(20, 20, 20)
+    solid = box
 
-        # 2. Erste Fillets auf vertikale Kanten
-        all_edges = list(solid.edges())
-        # Finde vertikale Kanten (z-direction)
-        vertical_edges = []
-        for edge in all_edges:
-            center = edge.center()
-            # Z-Kante wenn Z-Koordinate variiert
-            if abs(center.Z) > 9.9:  # Nahe 10 oder 0
-                vertical_edges.append(edge)
+    # 2. Fillet auf eine vertikale Kante
+    all_edges = list(solid.edges())
+    vertical_edges = [
+        e for e in all_edges
+        if abs(e.length - 20.0) < 0.1  # Vertikale Kanten = 20mm lang (Box-Höhe)
+    ]
 
-        if len(vertical_edges) < 2:
-            # Fallback: einfach die ersten 4
-            vertical_edges = all_edges[:4]
+    assert len(vertical_edges) >= 1, f"Keine vertikale Kanten gefunden"
 
-        result1 = OCPFilletHelper.fillet(
-            solid=solid,
-            edges=vertical_edges[:2],  # Nur 2 filleten
-            radius=2.0,
-            naming_service=service,
-            feature_id="fillet_1"
-        )
+    result1 = OCPFilletHelper.fillet(
+        solid=solid,
+        edges=vertical_edges[:1],
+        radius=2.0,
+        naming_service=service,
+        feature_id="fillet_1"
+    )
 
-        assert result1 is not None, "Erstes Fillet fehlgeschlagen"
+    assert result1 is not None, "Fillet fehlgeschlagen"
 
-        stats1 = service.get_stats()
-        print(f"  Nach Fillet 1: {stats1['total_shapes']} Shapes")
+    stats1 = service.get_stats()
+    print(f"  Nach Fillet: {stats1['total_shapes']} Shapes")
 
-        # 3. Zweite Fillets auf andere Edges
-        remaining_edges = [e for e in result1.edges() if e not in vertical_edges[:2]]
-        if len(remaining_edges) >= 2:
-            result2 = OCPFilletHelper.fillet(
-                solid=result1,
-                edges=remaining_edges[:2],
-                radius=1.0,
-                naming_service=service,
-                feature_id="fillet_2"
-            )
-        else:
-            result2 = result1  # Kein zweites Fillet möglich
+    # 3. Chamfer auf eine horizontale Top-Kante des Fillet-Ergebnisses
+    top_edges = [
+        e for e in result1.edges()
+        if abs(e.center().Z - 10.0) < 0.5  # Top-Face bei Z=10
+        and abs(e.length - 20.0) < 0.5  # Geradlinige Kante (20mm)
+    ]
 
-        stats2 = service.get_stats()
-        print(f"  Nach Fillet 2: {stats2['total_shapes']} Shapes")
+    assert len(top_edges) >= 1, f"Keine Top-Kanten gefunden für Chamfer"
 
-        # 4. Chamfer auf noch fillet-freie Kanten
-        chamfer_edges = [e for e in result2.edges() if e not in vertical_edges[:2]][:2]
-        if len(chamfer_edges) >= 1:
-            result3 = OCPChamferHelper.chamfer(
-                solid=result2,
-                edges=chamfer_edges,
-                distance=0.5,
-                naming_service=service,
-                feature_id="chamfer_1"
-            )
-        else:
-            result3 = result2
+    result3 = OCPChamferHelper.chamfer(
+        solid=result1,
+        edges=top_edges[:1],
+        distance=0.5,
+        naming_service=service,
+        feature_id="chamfer_1"
+    )
 
-        stats3 = service.get_stats()
-        print(f"  Nach Chamfer: {stats3['total_shapes']} Shapes")
+    assert result3 is not None, "Chamfer fehlgeschlagen"
 
-        # 5. Prüfe Operation-Historie
-        ops_count = len(service._operations)
-        assert ops_count >= 1, f"Zu wenige OperationRecords: {ops_count}"
+    stats2 = service.get_stats()
+    print(f"  Nach Chamfer: {stats2['total_shapes']} Shapes")
 
-        print(f"  ✓ Fillet→Chamfer Kette: {stats3['total_shapes']} Shapes, {ops_count} OperationRecords")
-        return True
+    # 4. Prüfe Operation-Historie
+    ops_count = len(service._operations)
+    assert ops_count >= 2, f"Zu wenige OperationRecords: {ops_count}"
 
-    except Exception as e:
-        print(f"  ✗ Fillet→Chamfer Kette fehlgeschlagen: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    print(f"  ✓ Fillet→Chamfer Kette: {stats2['total_shapes']} Shapes, {ops_count} OperationRecords")
 
 
 def test_shape_reference_resolution():
@@ -255,41 +221,33 @@ def test_shape_reference_resolution():
 
     service = ShapeNamingService()
 
-    try:
-        # 1. Original-Box erstellen
-        box = Box(10, 10, 10)
-        solid = box
+    # 1. Original-Box erstellen
+    box = Box(10, 10, 10)
+    solid = box
 
-        # 2. Edges registrieren
-        edge_count = service.register_solid_edges(solid, "original")
-        assert edge_count > 0, "Keine Edges registriert"
+    # 2. Edges registrieren
+    edge_count = service.register_solid_edges(solid, "original")
+    assert edge_count > 0, "Keine Edges registriert"
 
-        # 3. Direkte Auflösung testen (ohne Transformation)
-        resolved_direct = 0
-        for sid in list(service._by_feature.get("original", []))[:5]:
-            resolved_shape = service.resolve_shape(
-                sid,
-                solid.wrapped,
-                log_unresolved=False
-            )
-            if resolved_shape is not None:
-                resolved_direct += 1
+    # 3. Direkte Auflösung testen (ohne Transformation)
+    resolved_direct = 0
+    for sid in list(service._by_feature.get("original", []))[:5]:
+        resolved_shape = service.resolve_shape(
+            sid,
+            solid.wrapped,
+            log_unresolved=False
+        )
+        if resolved_shape is not None:
+            resolved_direct += 1
 
-        print(f"  Direkte Auflösung: {resolved_direct}/5 Shapes erfolgreich")
+    print(f"  Direkte Auflösung: {resolved_direct}/5 Shapes erfolgreich")
 
-        # Geometrisches Matching testen (mit leichten Verschiebungen)
-        # Da geometrisches Matching Toleranzen hat, testen wir mit kleineren Verschiebungen
-        # Die direkte Auflösung sollte funktionieren
-        assert resolved_direct >= 3, f"Zu wenige Shapes direkt aufgelöst: {resolved_direct}/5"
+    # Geometrisches Matching testen (mit leichten Verschiebungen)
+    # Da geometrisches Matching Toleranzen hat, testen wir mit kleineren Verschiebungen
+    # Die direkte Auflösung sollte funktionieren
+    assert resolved_direct >= 3, f"Zu wenige Shapes direkt aufgelöst: {resolved_direct}/5"
 
-        print("  ✓ ShapeReference Auflösung erfolgreich")
-        return True
-
-    except Exception as e:
-        print(f"  ✗ ShapeReference Auflösung fehlgeschlagen: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    print("  ✓ ShapeReference Auflösung erfolgreich")
 
 
 def test_compact_operations():
@@ -301,37 +259,29 @@ def test_compact_operations():
 
     service = ShapeNamingService()
 
-    try:
-        # 1. Box 1 registrieren
-        box1 = Box(10, 10, 10)
-        service.register_solid_edges(box1, "box1")
-        count1 = service.get_stats()['total_shapes']
+    # 1. Box 1 registrieren
+    box1 = Box(10, 10, 10)
+    service.register_solid_edges(box1, "box1")
+    count1 = service.get_stats()['total_shapes']
 
-        # 2. Box 2 registrieren (andere Geometrie)
-        box2 = Box(5, 5, 5)
-        service.register_solid_edges(box2, "box2")
-        count2 = service.get_stats()['total_shapes']
+    # 2. Box 2 registrieren (andere Geometrie)
+    box2 = Box(5, 5, 5)
+    service.register_solid_edges(box2, "box2")
+    count2 = service.get_stats()['total_shapes']
 
-        assert count2 > count1, "Keine neuen Shapes registriert"
+    assert count2 > count1, "Keine neuen Shapes registriert"
 
-        # 3. Compact mit box2 aufräumen (box1 Shapes sind stale)
-        removed = service.compact(box2.wrapped)
+    # 3. Compact mit box2 aufräumen (box1 Shapes sind stale)
+    removed = service.compact(box2.wrapped)
 
-        count3 = service.get_stats()['total_shapes']
+    count3 = service.get_stats()['total_shapes']
 
-        print(f"  Vorher: {count2}, Nach Compact: {count3}, Entfernt: {removed}")
+    print(f"  Vorher: {count2}, Nach Compact: {count3}, Entfernt: {removed}")
 
-        assert count3 <= count2, "Compact hat Shapes hinzugefügt?"
-        assert removed > 0, "Keine Shapes entfernt"
+    assert count3 <= count2, "Compact hat Shapes hinzugefügt?"
+    assert removed > 0, "Keine Shapes entfernt"
 
-        print("  ✓ Compact Operations erfolgreich")
-        return True
-
-    except Exception as e:
-        print(f"  ✗ Compact Operations fehlgeschlagen: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    print("  ✓ Compact Operations erfolgreich")
 
 
 def test_health_report_comprehensive():
@@ -396,7 +346,6 @@ def test_health_report_comprehensive():
         print(f"    {feat['name']}: {refs_ok} OK, {refs_fallback} Fallback, {refs_broken} Broken")
 
     print("  ✓ Health Report Comprehensive erfolgreich")
-    return True
 
 
 def test_serialization_roundtrip():
@@ -405,51 +354,43 @@ def test_serialization_roundtrip():
 
     print("\n[Test] ShapeID Serialisierung Roundtrip")
 
-    try:
-        # 1. ShapeID erstellen
-        original = ShapeID.create(
-            shape_type=ShapeType.EDGE,
-            feature_id="test_feature",
-            local_index=5,
-            geometry_data=(1.0, 2.0, 3.0, 10.0)
-        )
+    # 1. ShapeID erstellen
+    original = ShapeID.create(
+        shape_type=ShapeType.EDGE,
+        feature_id="test_feature",
+        local_index=5,
+        geometry_data=(1.0, 2.0, 3.0, 10.0)
+    )
 
-        # 2. Zu Dict konvertieren
-        data = {
-            'uuid': original.uuid,
-            'shape_type': original.shape_type.name,
-            'feature_id': original.feature_id,
-            'local_index': original.local_index,
-            'geometry_hash': original.geometry_hash,
-            'timestamp': original.timestamp
-        }
+    # 2. Zu Dict konvertieren
+    data = {
+        'uuid': original.uuid,
+        'shape_type': original.shape_type.name,
+        'feature_id': original.feature_id,
+        'local_index': original.local_index,
+        'geometry_hash': original.geometry_hash,
+        'timestamp': original.timestamp
+    }
 
-        # 3. Aus Dict wiederherstellen
-        restored = ShapeID(
-            uuid=data['uuid'],
-            shape_type=ShapeType[data['shape_type']],
-            feature_id=data['feature_id'],
-            local_index=data['local_index'],
-            geometry_hash=data['geometry_hash'],
-            timestamp=data['timestamp']
-        )
+    # 3. Aus Dict wiederherstellen
+    restored = ShapeID(
+        uuid=data['uuid'],
+        shape_type=ShapeType[data['shape_type']],
+        feature_id=data['feature_id'],
+        local_index=data['local_index'],
+        geometry_hash=data['geometry_hash'],
+        timestamp=data['timestamp']
+    )
 
-        # 4. Validierung
-        assert restored.uuid == original.uuid, "UUID nicht gleich"
-        assert restored.shape_type == original.shape_type, "ShapeType nicht gleich"
-        assert restored.feature_id == original.feature_id, "FeatureID nicht gleich"
-        assert restored.local_index == original.local_index, "LocalIndex nicht gleich"
+    # 4. Validierung
+    assert restored.uuid == original.uuid, "UUID nicht gleich"
+    assert restored.shape_type == original.shape_type, "ShapeType nicht gleich"
+    assert restored.feature_id == original.feature_id, "FeatureID nicht gleich"
+    assert restored.local_index == original.local_index, "LocalIndex nicht gleich"
 
-        print(f"  Original: {original.uuid[:16]}...")
-        print(f"  Restored: {restored.uuid[:16]}...")
-        print("  ✓ ShapeID Serialisierung erfolgreich")
-        return True
-
-    except Exception as e:
-        print(f"  ✗ Serialisierung fehlgeschlagen: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    print(f"  Original: {original.uuid[:16]}...")
+    print(f"  Restored: {restored.uuid[:16]}...")
+    print("  ✓ ShapeID Serialisierung erfolgreich")
 
 
 def test_registry_performance():
@@ -462,45 +403,37 @@ def test_registry_performance():
 
     service = ShapeNamingService()
 
-    try:
-        # Viele Boxen erstellen und registrieren
-        start = time.time()
+    # Viele Boxen erstellen und registrieren
+    start = time.time()
 
-        for i in range(10):  # 10 Boxen
-            box = Box(10 + i, 10 + i, 10 + i)
-            service.register_solid_edges(box, f"perf_test_{i}")
+    for i in range(10):  # 10 Boxen
+        box = Box(10 + i, 10 + i, 10 + i)
+        service.register_solid_edges(box, f"perf_test_{i}")
 
-        elapsed = time.time() - start
+    elapsed = time.time() - start
 
-        stats = service.get_stats()
-        print(f"  Registriert: {stats['total_shapes']} Shapes in {elapsed:.3f}s")
+    stats = service.get_stats()
+    print(f"  Registriert: {stats['total_shapes']} Shapes in {elapsed:.3f}s")
 
-        # Lookup-Performance testen
-        start_lookup = time.time()
-        lookups = 0
-        found = 0
+    # Lookup-Performance testen
+    start_lookup = time.time()
+    lookups = 0
+    found = 0
 
-        for uuid, record in list(service._shapes.items())[:100]:  # Max 100 Lookups
-            shape = service.resolve_shape(record.shape_id, Box(10, 10, 10).wrapped, log_unresolved=False)
-            lookups += 1
-            if shape is not None:
-                found += 1
+    for uuid, record in list(service._shapes.items())[:100]:  # Max 100 Lookups
+        shape = service.resolve_shape(record.shape_id, Box(10, 10, 10).wrapped, log_unresolved=False)
+        lookups += 1
+        if shape is not None:
+            found += 1
 
-        elapsed_lookup = time.time() - start_lookup
+    elapsed_lookup = time.time() - start_lookup
 
-        print(f"  Lookups: {lookups} in {elapsed_lookup:.3f}s ({found} gefunden)")
+    print(f"  Lookups: {lookups} in {elapsed_lookup:.3f}s ({found} gefunden)")
 
-        # Performance sollte akzeptabel sein
-        assert elapsed < 5.0, "Registrierung zu langsam"
+    # Performance sollte akzeptabel sein
+    assert elapsed < 5.0, "Registrierung zu langsam"
 
-        print("  ✓ Registry Performance erfolgreich")
-        return True
-
-    except Exception as e:
-        print(f"  ✗ Performance Test fehlgeschlagen: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    print("  ✓ Registry Performance erfolgreich")
 
 
 def run_comprehensive_tests():
@@ -524,7 +457,8 @@ def run_comprehensive_tests():
     results = {}
     for name, test_fn in tests:
         try:
-            results[name] = test_fn()
+            test_fn()
+            results[name] = True
         except Exception as e:
             print(f"  ✗ EXCEPTION: {e}")
             import traceback
@@ -537,20 +471,16 @@ def run_comprehensive_tests():
 
     passed = 0
     failed = 0
-    skipped = 0
 
     for name, result in results.items():
         if result is True:
             print(f"  ✓ {name}")
             passed += 1
-        elif result is None:
-            print(f"  - {name} (SKIPPED)")
-            skipped += 1
         else:
             print(f"  ✗ {name}")
             failed += 1
 
-    print(f"\nTotal: {passed} passed, {failed} failed, {skipped} skipped")
+    print(f"\nTotal: {passed} passed, {failed} failed")
 
     if failed == 0:
         print("\n" + "=" * 70)

@@ -67,15 +67,48 @@ def _set_operation_combo(combo: QComboBox, operation_key: str):
     combo.setCurrentText(translated)
 
 
-def _create_number_input(label_text, parent_layout, suffix=""):
-    """Helper: Label + QLineEdit fuer Zahlen"""
+DIALOG_LABEL_WIDTH = 120  # Standardized label width across all feature dialogs
+
+# Styles for real-time input validation
+_STYLE_INPUT_VALID = ""
+_STYLE_INPUT_INVALID = "border: 1px solid #cc4444; background: #2a1515;"
+
+
+def _setup_realtime_validation(line_edit, min_val=0.0, max_val=1e6, allow_zero=False):
+    """Adds real-time visual validation to a QLineEdit.
+
+    Shows red border when value is out of range, resets when valid.
+    """
+    def _validate():
+        text = line_edit.text().replace(",", ".")
+        try:
+            val = float(text) if text.strip() else None
+            if val is None:
+                line_edit.setStyleSheet(_STYLE_INPUT_INVALID)
+                line_edit.setToolTip(f"Value required ({min_val} - {max_val})")
+            elif (not allow_zero and val <= min_val) or val < min_val or val > max_val:
+                line_edit.setStyleSheet(_STYLE_INPUT_INVALID)
+                line_edit.setToolTip(f"Value must be {'>' if not allow_zero else '>='} {min_val} and <= {max_val}")
+            else:
+                line_edit.setStyleSheet(_STYLE_INPUT_VALID)
+                line_edit.setToolTip("")
+        except ValueError:
+            line_edit.setStyleSheet(_STYLE_INPUT_INVALID)
+            line_edit.setToolTip("Invalid number")
+
+    line_edit.textChanged.connect(_validate)
+
+
+def _create_number_input(label_text, parent_layout, suffix="", min_val=0.0, max_val=1e6):
+    """Helper: Label + QLineEdit fuer Zahlen mit Real-Time Validation"""
     row = QHBoxLayout()
     label = QLabel(label_text)
-    label.setMinimumWidth(100)
+    label.setMinimumWidth(DIALOG_LABEL_WIDTH)
     row.addWidget(label)
 
     line_edit = QLineEdit()
     setup_decimal_input(line_edit)
+    _setup_realtime_validation(line_edit, min_val=min_val, max_val=max_val)
     row.addWidget(line_edit)
 
     if suffix:
@@ -184,7 +217,7 @@ def _add_geometry_delta_section(layout, feature, body, dialog):
         )
 
         if is_valid or has_stable_face_ref:
-            show_face_btn = QPushButton(tr("Fl??che anzeigen"))
+            show_face_btn = QPushButton(tr("Fläche anzeigen"))
             show_face_btn.setFixedHeight(20)
             show_face_btn.setStyleSheet(
                 "QPushButton { background: #333; color: #ccc; border: 1px solid #555; "
@@ -842,7 +875,7 @@ class RevolveEditDialog(QDialog):
         # Axis
         axis_row = QHBoxLayout()
         axis_label = QLabel(tr("Axis:"))
-        axis_label.setMinimumWidth(100)
+        axis_label.setMinimumWidth(DIALOG_LABEL_WIDTH)
         axis_row.addWidget(axis_label)
         self.axis_combo = QComboBox()
         self.axis_combo.addItems(["X", "Y", "Z"])

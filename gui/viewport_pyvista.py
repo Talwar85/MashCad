@@ -369,6 +369,9 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
     extrude_cancelled = Signal()  # Rechtsklick/Esc bricht Extrude ab
     background_clicked = Signal()  # Klick ins Leere (Deselect)
     create_sketch_requested = Signal(int)  # face_id für Sketch-Erstellung
+    context_edit_feature_requested = Signal(object, object)  # (feature, body) from context menu
+    context_hide_body_requested = Signal(object)  # body from context menu
+    context_delete_body_requested = Signal(object)  # body from context menu
 
 
     def __init__(self, parent=None):
@@ -7272,43 +7275,97 @@ class PyVistaViewport(QWidget, SelectionMixin, ExtrudeMixin, PickingMixin, BodyR
         """Zeigt Kontext-Menü an der Mausposition."""
         from PySide6.QtWidgets import QMenu
         from PySide6.QtGui import QAction
-        
+        from i18n import tr
+
         # Picken was unter der Maus ist (Face oder Body)
         local_pos = pos.toPoint() if hasattr(pos, "toPoint") else pos
         x, y = int(local_pos.x()), int(local_pos.y())
         hit_id = self.pick(x, y, selection_filter=self.active_selection_filter)
-        
+
         menu = QMenu(self)
         menu.aboutToHide.connect(self.clear_trace_hint)
-        
-        # 1. Sketch auf Face erstellen
+
+        # 1. Objekt-spezifische Aktionen (wenn etwas angeklickt)
         if hit_id != -1:
-             # Finde Face
-             if hasattr(self, 'detector') and self.detector and self.detector.selection_faces:
-                 face = next((f for f in self.detector.selection_faces if f.id == hit_id), None)
-                 if face:
-                     if getattr(face, "domain_type", "") == "body_face" and self._is_trace_assist_allowed():
-                         self.show_trace_hint(hit_id)
+            # Finde Face/Body
+            hit_body = None
+            hit_face = None
+            if hasattr(self, 'detector') and self.detector and self.detector.selection_faces:
+                hit_face = next((f for f in self.detector.selection_faces if f.id == hit_id), None)
+                if hit_face:
+                    if getattr(hit_face, "domain_type", "") == "body_face" and self._is_trace_assist_allowed():
+                        self.show_trace_hint(hit_id)
 
-                     action = QAction("Create Sketch (T)", self)
+            # Body aus Selection ermitteln
+            if hasattr(self, '_selected_bodies') and self._selected_bodies:
+                hit_body = self._selected_bodies[0] if self._selected_bodies else None
+            elif hasattr(self, '_actor_to_body'):
+                for actor, body in self._actor_to_body.items():
+                    if hasattr(actor, 'GetPickable') and actor.GetPickable():
+                        hit_body = body
+                        break
 
-                     def _request_create_sketch(fid=hit_id):
-                         self.create_sketch_requested.emit(fid)
-                         self.clear_trace_hint()
+            # Create Sketch on Face
+            if hit_face:
+                action = QAction(tr("Create Sketch") + " (T)", self)
 
-                     action.triggered.connect(_request_create_sketch)
-                     menu.addAction(action)
-                     
-                     menu.addSeparator()
+                def _request_create_sketch(fid=hit_id):
+                    self.create_sketch_requested.emit(fid)
+                    self.clear_trace_hint()
 
-        # 2. View Operations (Immer verfügbar)
-        action_home = QAction("🏠 Home View", self)
+                action.triggered.connect(_request_create_sketch)
+                menu.addAction(action)
+
+            # Body operations
+            if hit_body:
+                menu.addSeparator()
+
+                # Edit last feature
+                if hasattr(hit_body, 'features') and hit_body.features:
+                    last_feat = hit_body.features[-1]
+                    action_edit = QAction(tr("Edit") + f" {last_feat.name}", self)
+                    action_edit.triggered.connect(
+                        lambda checked=False, b=hit_body, f=last_feat:
+                            self.context_edit_feature_requested.emit(f, b)
+                    )
+                    menu.addAction(action_edit)
+
+                # Hide/Show Body
+                action_hide = QAction(tr("Hide") + f" {hit_body.name}", self)
+                action_hide.triggered.connect(
+                    lambda checked=False, b=hit_body: self.context_hide_body_requested.emit(b)
+                )
+                menu.addAction(action_hide)
+
+                # Delete Body
+                action_del = QAction(tr("Delete") + f" {hit_body.name}", self)
+                action_del.triggered.connect(
+                    lambda checked=False, b=hit_body: self.context_delete_body_requested.emit(b)
+                )
+                menu.addAction(action_del)
+
+            menu.addSeparator()
+
+        # 2. View Operations (Immer verfuegbar)
+        action_home = QAction(tr("Home View"), self)
         action_home.triggered.connect(lambda: self.view_iso())
         menu.addAction(action_home)
 
-        action_fit = QAction("🔍 Fit View", self)
+        action_fit = QAction(tr("Fit View"), self)
         action_fit.triggered.connect(lambda: self.view_fit())
         menu.addAction(action_fit)
+
+        action_top = QAction(tr("Top"), self)
+        action_top.triggered.connect(lambda: self.set_view('top'))
+        menu.addAction(action_top)
+
+        action_front = QAction(tr("Front"), self)
+        action_front.triggered.connect(lambda: self.set_view('front'))
+        menu.addAction(action_front)
+
+        action_right = QAction(tr("Right"), self)
+        action_right.triggered.connect(lambda: self.set_view('right'))
+        menu.addAction(action_right)
 
         # Show Menu
         global_pos = self.mapToGlobal(local_pos)

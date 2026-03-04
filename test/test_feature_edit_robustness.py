@@ -66,7 +66,9 @@ def test_extrude_edit_distance_rebuild_is_stable():
     sketch.add_rectangle(0.0, 0.0, 20.0, 20.0)
     sketch.closed_profiles = [Polygon([(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0), (0.0, 0.0)])]
 
-    body = Body("pi005_extrude_body")
+    doc = Document("pi005_extrude_doc")
+    body = Body("pi005_extrude_body", document=doc)
+    doc.add_body(body)
     feature = ExtrudeFeature(sketch=sketch, distance=10.0, operation="New Body")
     body.add_feature(feature)
     assert _is_success(feature)

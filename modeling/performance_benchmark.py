@@ -127,31 +127,29 @@ class BenchmarkReport:
         }
     
     def print_summary(self) -> None:
-        """Print a formatted summary to console."""
-        print("\n" + "=" * 60)
-        print("PERFORMANCE BENCHMARK REPORT")
-        print("=" * 60)
-        print(f"Timestamp: {self.timestamp}")
-        print(f"Baseline: {self.baseline_file}")
-        print()
-        
+        """Print a formatted summary to logger."""
+        logger.info("=" * 60)
+        logger.info("PERFORMANCE BENCHMARK REPORT")
+        logger.info("=" * 60)
+        logger.info(f"Timestamp: {self.timestamp}")
+        logger.info(f"Baseline: {self.baseline_file}")
+
         for result in self.results:
-            status = "✅ PASS" if not result.is_regression else "⚠️ REGRESSION"
+            status = "PASS" if not result.is_regression else "REGRESSION"
             if result.is_failure:
-                status = "❌ FAIL"
-            
-            print(f"  {result.name:20} {result.duration_ms:8.1f}ms  "
-                  f"(target: {result.target_ms}ms) {status}")
-        
-        print()
+                status = "FAIL"
+
+            logger.info(f"  {result.name:20} {result.duration_ms:8.1f}ms  "
+                         f"(target: {result.target_ms}ms) {status}")
+
         if self.has_regressions:
-            print("REGRESSIONS DETECTED:")
+            logger.warning("REGRESSIONS DETECTED:")
             for detail in self.regression_details:
-                print(f"  - {detail}")
+                logger.warning(f"  - {detail}")
         else:
-            print("✅ No performance regressions detected")
-        
-        print("=" * 60)
+            logger.info("No performance regressions detected")
+
+        logger.info("=" * 60)
 
 
 class BenchmarkTimer:

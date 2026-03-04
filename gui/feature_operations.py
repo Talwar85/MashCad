@@ -571,6 +571,12 @@ class FeatureMixin:
                         self._finish_extrusion_ui(success=True)
                         logger.success(f"Extrude: {success_count} Body/ies erstellt/geändert")
 
+                        # Success toast
+                        if hasattr(self, 'notification_manager') and self.notification_manager:
+                            self.notification_manager.show_toast_overlay(
+                                "success", f"Extrude: {success_count} Body(s) created"
+                            )
+
                 except Exception as e:
                     logger.error(f"Extrusion fehlgeschlagen: {e}")
                     import traceback
@@ -883,6 +889,14 @@ class FeatureMixin:
             cmd = EditFeatureCommand(body, feature, old_data, new_data, self)
             self.undo_stack.push(cmd)
             logger.success(f"Feature '{feature.name}' aktualisiert (Undo: Ctrl+Z)")
+
+            # Success toast for user feedback
+            if hasattr(self, 'status_bar') and self.status_bar:
+                self.status_bar.set_status(f"{feature.name} updated")
+            if hasattr(self, 'notification_manager') and self.notification_manager:
+                self.notification_manager.show_toast_overlay(
+                    "success", f"{feature.name} updated"
+                )
 
     def _on_feature_deleted(self, feature, body):
         """

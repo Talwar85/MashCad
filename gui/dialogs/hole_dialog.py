@@ -66,7 +66,10 @@ class HoleDialog(QDialog):
         cb_layout = QVBoxLayout()
 
         cb_dia_row = QHBoxLayout()
-        cb_dia_row.addWidget(QLabel(tr("CB Diameter:")))
+        cb_dia_lbl = QLabel(tr("Counterbore Diameter:"))
+        cb_dia_lbl.setToolTip(tr("Diameter of the larger counterbore hole for the screw head"))
+        cb_dia_lbl.setMinimumWidth(120)
+        cb_dia_row.addWidget(cb_dia_lbl)
         self.cb_diameter_input = QLineEdit("12")
         self.cb_diameter_input.setValidator(QDoubleValidator(0.1, 1000, 2))
         cb_dia_row.addWidget(self.cb_diameter_input)
@@ -74,7 +77,10 @@ class HoleDialog(QDialog):
         cb_layout.addLayout(cb_dia_row)
 
         cb_depth_row = QHBoxLayout()
-        cb_depth_row.addWidget(QLabel(tr("CB Depth:")))
+        cb_depth_lbl = QLabel(tr("Counterbore Depth:"))
+        cb_depth_lbl.setToolTip(tr("Depth of the counterbore recess for the screw head"))
+        cb_depth_lbl.setMinimumWidth(120)
+        cb_depth_row.addWidget(cb_depth_lbl)
         self.cb_depth_input = QLineEdit("3")
         self.cb_depth_input.setValidator(QDoubleValidator(0.1, 1000, 2))
         cb_depth_row.addWidget(self.cb_depth_input)

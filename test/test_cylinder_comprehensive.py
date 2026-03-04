@@ -23,7 +23,7 @@ from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
 from OCP.GProp import GProp_GProps
 from OCP.BRepGProp import BRepGProp
-from modeling import Body, PrimitiveFeature, ExtrudeFeature, _solid_metrics
+from modeling import Body, Document, PrimitiveFeature, ExtrudeFeature, _solid_metrics
 from sketcher.sketch import Sketch
 from shapely.geometry import Polygon
 
@@ -313,7 +313,9 @@ class TestArcSketches:
         coords.append(coords[0])
         sketch.closed_profiles = [Polygon(coords)]
 
-        body = Body(name="ArcBody")
+        doc = Document("ArcBody_doc")
+        body = Body(name="ArcBody", document=doc)
+        doc.add_body(body)
         extrude_feat = ExtrudeFeature(sketch=sketch, distance=50.0, operation="NewBody")
         body.add_feature(extrude_feat, rebuild=True)
 
@@ -338,7 +340,9 @@ class TestArcSketches:
 
         sketch.closed_profiles = [Polygon(outer_coords, [inner_coords])]
 
-        body = Body(name="ArcWithHole")
+        doc = Document("ArcWithHole_doc")
+        body = Body(name="ArcWithHole", document=doc)
+        doc.add_body(body)
         extrude_feat = ExtrudeFeature(sketch=sketch, distance=50.0, operation="NewBody")
         body.add_feature(extrude_feat, rebuild=True)
 
@@ -358,7 +362,9 @@ class TestArcSketches:
         coords.append(coords[0])
         sketch.closed_profiles = [Polygon(coords)]
 
-        body = Body(name="ArcStability")
+        doc = Document("ArcStability_doc")
+        body = Body(name="ArcStability", document=doc)
+        doc.add_body(body)
         extrude_feat = ExtrudeFeature(sketch=sketch, distance=50.0, operation="NewBody")
         body.add_feature(extrude_feat, rebuild=True)
 

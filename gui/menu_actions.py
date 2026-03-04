@@ -828,11 +828,73 @@ class MenuActionsMixin:
                 "Bitte starte MashCAD neu, um die neue Sprache zu übernehmen."
             )
     
+    def _edit_selected_feature(self):
+        """Edit the currently selected feature in the browser (Ctrl+E)."""
+        if not hasattr(self, 'browser') or not self.browser:
+            return
+        selected = self.browser.tree.selectedItems()
+        if not selected:
+            return
+        data = selected[0].data(0, Qt.UserRole)
+        if data and data[0] == 'feature':
+            self._edit_feature(data)
+        elif data and data[0] == 'sketch':
+            self._edit_feature(data)
+
+    def _show_keyboard_shortcuts(self):
+        """Show keyboard shortcuts reference dialog (Ctrl+/)."""
+        from i18n import tr
+
+        shortcuts = [
+            ("Ctrl+N", tr("New Project")),
+            ("Ctrl+O", tr("Open...")),
+            ("Ctrl+S", tr("Save...")),
+            ("Ctrl+Z", tr("Undo")),
+            ("Ctrl+Y", tr("Redo")),
+            ("Ctrl+E", tr("Edit Feature")),
+            ("Ctrl+Shift+P", tr("Parameters...")),
+            ("Ctrl+/", tr("Keyboard Shortcuts")),
+            ("", ""),
+            ("E", tr("Extrude")),
+            ("T", tr("Create Sketch on Face")),
+            ("G", tr("Move")),
+            ("R", tr("Rotate")),
+            ("S", tr("Scale")),
+            ("Del", tr("Delete")),
+            ("Esc", tr("Cancel / Deselect")),
+            ("", ""),
+            ("H", tr("Horizontal Constraint (Sketch)")),
+            ("V", tr("Vertical Constraint (Sketch)")),
+            ("P", tr("Parallel Constraint (Sketch)")),
+            ("Tab", tr("Cycle Sketch Tool")),
+            ("Home / 0", tr("Reset Sketch View")),
+        ]
+
+        text = "<table style='font-size: 12px;'>"
+        for key, desc in shortcuts:
+            if not key and not desc:
+                text += "<tr><td colspan='2' style='height: 8px;'></td></tr>"
+            else:
+                text += (
+                    f"<tr>"
+                    f"<td style='padding: 2px 16px 2px 0; color: #88bbff; font-family: Consolas, monospace;'>"
+                    f"<b>{key}</b></td>"
+                    f"<td style='padding: 2px 0; color: #ccc;'>{desc}</td>"
+                    f"</tr>"
+                )
+        text += "</table>"
+
+        QMessageBox.information(
+            self,
+            tr("Keyboard Shortcuts"),
+            f"<h3>{tr('Keyboard Shortcuts')}</h3>{text}"
+        )
+
     def _show_about(self):
         """Show About dialog."""
         from i18n import tr
         from config.version import APP_NAME, VERSION, COPYRIGHT
-        
+
         QMessageBox.about(self, tr("Über MashCad"),
             f"<h2>{APP_NAME}</h2>"
             f"<p>Version {VERSION}</p>"

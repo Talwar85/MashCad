@@ -194,115 +194,105 @@ class BodyExtrudeMixin:
                     logger.info(f"[OCP-FIRST] Face aus BREP (Push/Pull auf {feature.face_type})")
                     return self._extrude_from_face_brep(feature)
 
-            # === TNP v4.1: Native Circle Path ===
-            if has_sketch and hasattr(sketch, 'circles') and sketch.circles:
-                native_faces = self._create_faces_from_native_circles(sketch, plane, getattr(feature, 'profile_selector', None))
-                if native_faces:
-                    for face in native_faces:
-                        solid = self._extrude_single_face(face, feature, plane, naming_service)
-                        if solid:
-                            solids.append(solid)
-
-            # === TNP v4.1: Native Arc Path ===
-            if has_sketch and hasattr(sketch, 'arcs') and sketch.arcs:
-                native_arc_faces = self._create_faces_from_native_arcs(sketch, plane, getattr(feature, 'profile_selector', None))
-                if native_arc_faces:
-                    for face in native_arc_faces:
-                        solid = self._extrude_single_face(face, feature, plane, naming_service)
-                        if solid:
-                            solids.append(solid)
-
-            # === TNP v4.1: Native Ellipse Path ===
-            if has_sketch and hasattr(sketch, 'ellipses') and sketch.ellipses:
-                ellipse_faces = self._extrude_sketch_ellipses(sketch, plane, getattr(feature, 'profile_selector', None))
-                if ellipse_faces:
-                    for face in ellipse_faces:
-                        solid = self._extrude_single_face(face, feature, plane, naming_service)
-                        if solid:
-                            solids.append(solid)
-
-            # === Polygon-basierte Extrusion ===
-            for poly in polys_to_extrude:
+            # === Native Profile Detection (Arc+Line+Circle → OCP Wires) ===
+            if has_sketch and not solids:
                 try:
-                    # Skip dict profiles (ellipse, circle, slot) - handled by native paths
-                    if isinstance(poly, dict):
-                        continue
+                    from sketcher.profile_detector_b3d import Build123dProfileDetector
+                    detector = Build123dProfileDetector()
+                    native_faces = detector.detect_profiles(sketch, plane)
+                    if native_faces:
+                        profile_selector = getattr(feature, 'profile_selector', None)
+                        if profile_selector:
+                            native_faces = self._filter_native_faces_by_selector(
+                                native_faces, profile_selector
+                            )
+                        for face in native_faces:
+                            solid = self._extrude_single_face(face, feature, plane, naming_service)
+                            if solid:
+                                solids.append(solid)
+                        if solids:
+                            logger.info(f"[OCP-FIRST] Native Profile Detection: {len(solids)} Solids")
+                except Exception as e:
+                    logger.debug(f"[OCP-FIRST] Native Profile Detection fehlgeschlagen: {e}")
 
-                    coords = list(poly.exterior.coords)[:-1]  # Shapely schließt Polygon
-                    if len(coords) < 3:
-                        continue
+            # === Polygon-basierte Extrusion (Fallback) ===
+            if not solids:
+                for poly in polys_to_extrude:
+                    try:
+                        # Skip dict profiles (ellipse, circle, slot) - handled by native paths
+                        if isinstance(poly, dict):
+                            continue
 
-                    # Circle-Detection: Polygon-Punkte auf Kreis prüfen
-                    circle_info = self._detect_circle_from_points(coords)
-                    if circle_info and len(coords) >= 8:
-                        cx, cy = circle_info['center']
-                        radius = circle_info['radius']
-                        try:
-                            from build123d import Plane as B3DPlane
-                            center_3d = plane.from_local_coords((cx, cy))
-                            circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
-                            outer_wire = Wire.make_circle(radius, circle_plane)
-                            
-                            # Handle holes (interiors) for ring shapes
+                        coords = list(poly.exterior.coords)[:-1]  # Shapely schließt Polygon
+                        if len(coords) < 3:
+                            continue
+
+                        # Circle-Detection: Polygon-Punkte auf Kreis prüfen
+                        circle_info = self._detect_circle_from_points(coords)
+                        if circle_info and len(coords) >= 8:
+                            cx, cy = circle_info['center']
+                            radius = circle_info['radius']
+                            try:
+                                from build123d import Plane as B3DPlane
+                                center_3d = plane.from_local_coords((cx, cy))
+                                circle_plane = B3DPlane(origin=center_3d, z_dir=plane.z_dir)
+                                outer_wire = Wire.make_circle(radius, circle_plane)
+
+                                # Handle holes (interiors) for ring shapes
+                                hole_wires = []
+                                if hasattr(poly, 'interiors') and poly.interiors:
+                                    for interior in poly.interiors:
+                                        hole_coords = list(interior.coords)[:-1]
+                                        if len(hole_coords) >= 8:
+                                            hole_circle_info = self._detect_circle_from_points(hole_coords)
+                                            if hole_circle_info:
+                                                hcx, hcy = hole_circle_info['center']
+                                                hradius = hole_circle_info['radius']
+                                                hole_center_3d = plane.from_local_coords((hcx, hcy))
+                                                hole_plane = B3DPlane(origin=hole_center_3d, z_dir=plane.z_dir)
+                                                hole_wire = Wire.make_circle(hradius, hole_plane)
+                                                hole_wires.append(hole_wire)
+                                            else:
+                                                hole_pts_3d = [plane.from_local_coords((p[0], p[1])) for p in reversed(hole_coords)]
+                                                hole_wires.append(Wire.make_polygon(hole_pts_3d))
+
+                                if hole_wires:
+                                    from build123d import Face
+                                    face = Face(outer_wire, hole_wires)
+                                    logger.info(f"[OCP-FIRST] Ring erkannt: outer_r={radius:.2f}, {len(hole_wires)} holes")
+                                else:
+                                    face = make_face(outer_wire)
+                                    logger.info(f"[OCP-FIRST] Kreis erkannt: center=({cx:.2f},{cy:.2f}), r={radius:.2f}, {len(coords)} Punkte")
+                            except Exception as e:
+                                logger.debug(f"[OCP-FIRST] Native Kreis-Erstellung fehlgeschlagen, Polygon-Fallback: {e}")
+                                pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
+                                wire = Wire.make_polygon(pts_3d)
+                                face = make_face(wire)
+                        else:
+                            pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
+                            outer_wire = Wire.make_polygon(pts_3d)
+
+                            # Handle holes for non-circle polygons
                             hole_wires = []
                             if hasattr(poly, 'interiors') and poly.interiors:
                                 for interior in poly.interiors:
                                     hole_coords = list(interior.coords)[:-1]
-                                    if len(hole_coords) >= 8:
-                                        hole_circle_info = self._detect_circle_from_points(hole_coords)
-                                        if hole_circle_info:
-                                            hcx, hcy = hole_circle_info['center']
-                                            hradius = hole_circle_info['radius']
-                                            hole_center_3d = plane.from_local_coords((hcx, hcy))
-                                            hole_plane = B3DPlane(origin=hole_center_3d, z_dir=plane.z_dir)
-                                            # Create hole circle with reversed orientation
-                                            hole_wire = Wire.make_circle(hradius, hole_plane)
-                                            hole_wires.append(hole_wire)
-                                        else:
-                                            # Reverse polygon points for hole orientation
-                                            hole_pts_3d = [plane.from_local_coords((p[0], p[1])) for p in reversed(hole_coords)]
-                                            hole_wires.append(Wire.make_polygon(hole_pts_3d))
-                            
+                                    if len(hole_coords) >= 3:
+                                        hole_pts_3d = [plane.from_local_coords((p[0], p[1])) for p in reversed(hole_coords)]
+                                        hole_wires.append(Wire.make_polygon(hole_pts_3d))
+
                             if hole_wires:
-                                # Use Face constructor for proper hole handling
                                 from build123d import Face
                                 face = Face(outer_wire, hole_wires)
-                                logger.info(f"[OCP-FIRST] Ring erkannt: outer_r={radius:.2f}, {len(hole_wires)} holes")
                             else:
                                 face = make_face(outer_wire)
-                                logger.info(f"[OCP-FIRST] Kreis erkannt: center=({cx:.2f},{cy:.2f}), r={radius:.2f}, {len(coords)} Punkte")
-                        except Exception as e:
-                            logger.debug(f"[OCP-FIRST] Native Kreis-Erstellung fehlgeschlagen, Polygon-Fallback: {e}")
-                            pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
-                            wire = Wire.make_polygon(pts_3d)
-                            face = make_face(wire)
-                    else:
-                        pts_3d = [plane.from_local_coords((p[0], p[1])) for p in coords]
-                        outer_wire = Wire.make_polygon(pts_3d)
-                        
-                        # Handle holes for non-circle polygons
-                        hole_wires = []
-                        if hasattr(poly, 'interiors') and poly.interiors:
-                            for interior in poly.interiors:
-                                hole_coords = list(interior.coords)[:-1]
-                                if len(hole_coords) >= 3:
-                                    # Reverse points for hole orientation
-                                    hole_pts_3d = [plane.from_local_coords((p[0], p[1])) for p in reversed(hole_coords)]
-                                    hole_wires.append(Wire.make_polygon(hole_pts_3d))
-                        
-                        if hole_wires:
-                            # Use Face constructor for proper hole handling
-                            from build123d import Face
-                            face = Face(outer_wire, hole_wires)
-                        else:
-                            face = make_face(outer_wire)
 
-                    solid = self._extrude_single_face(face, feature, plane, naming_service)
-                    if solid:
-                        solids.append(solid)
+                        solid = self._extrude_single_face(face, feature, plane, naming_service)
+                        if solid:
+                            solids.append(solid)
 
-                except Exception as e:
-                    logger.debug(f"[OCP-FIRST] Polygon-Extrusion fehlgeschlagen: {e}")
+                    except Exception as e:
+                        logger.debug(f"[OCP-FIRST] Polygon-Extrusion fehlgeschlagen: {e}")
 
             # Combine solids
             if not solids:
@@ -861,6 +851,24 @@ class BodyExtrudeMixin:
             logger.warning(f"[W34] Slot Face Erstellung fehlgeschlagen: {e}")
 
         return faces
+
+    def _filter_native_faces_by_selector(self, faces, profile_selector):
+        """Filter native Build123d Faces by profile_selector centroids."""
+        if not profile_selector:
+            return faces
+        matched = []
+        for face in faces:
+            try:
+                center = face.center()
+                for sel in profile_selector:
+                    if len(sel) >= 2:
+                        dist = ((center.X - sel[0])**2 + (center.Y - sel[1])**2)**0.5
+                        if dist < 5.0:
+                            matched.append(face)
+                            break
+            except Exception:
+                matched.append(face)
+        return matched if matched else faces
 
     def _create_faces_from_native_circles(self, sketch, plane, profile_selector=None):
         """Create native OCP circle faces from sketch circles."""

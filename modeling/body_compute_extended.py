@@ -2330,6 +2330,14 @@ class BodyComputeExtendedMixin:
 
             distances = np.sqrt((pts[:, 0] - cx)**2 + (pts[:, 1] - cy)**2)
             if np.max(np.abs(distances - r)) < tolerance * max(r, 1.0):
+                # Angular coverage check — points must span full circle
+                angles = np.arctan2(pts[:, 1] - cy, pts[:, 0] - cx)
+                angles_sorted = np.sort(angles)
+                gaps = np.diff(angles_sorted)
+                wrap_gap = (2 * np.pi) - (angles_sorted[-1] - angles_sorted[0])
+                max_gap = max(np.max(gaps), wrap_gap)
+                if max_gap > np.radians(45):
+                    return None
                 return {'center': (float(cx), float(cy)), 'radius': float(r)}
         except Exception:
             pass

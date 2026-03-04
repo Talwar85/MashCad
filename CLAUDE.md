@@ -34,6 +34,7 @@
 5. **Fail-Fast Booleans:** `BooleanEngineV4` — eine Strategie, kein Multi-Strategy-Fallback
 6. **OCP Booleans:** `SetFuzzyValue(1e-4)`, `SetRunParallel(True)`, **kein** `SetGlue`
 7. **TNP:** Shape-Referenzen via `modeling/tnp_v5/` — History-based → Geometric → Legacy Fallback
+8. **Native Geometrie:** Sketch-Elemente (Arcs, Lines, Circles) immer als OCP-native Edges/Wires verarbeiten — nie zu Polygon-Approximationen degradieren. `Build123dProfileDetector` ist der primäre Pfad für Extrusion
 
 ## UX-Standards
 
@@ -51,6 +52,7 @@
 - **Multi-Strategy-Fallbacks** ("wenn A nicht klappt, probiere B")
 - **`pass`-Platzhalter** in Tests oder Implementierungen
 - **Eager Tessellation** in Event-Loops oder Mouse-Move Events
+- **Polygon-Approximation** von analytischer Geometrie (Arcs, Circles) — immer OCP-native Wires nutzen
 
 ## MANDATORY: Test-Regeln
 

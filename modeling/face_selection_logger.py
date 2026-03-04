@@ -291,15 +291,15 @@ class FaceSelectionLogger:
         """Gibt Zusammenfassung in Console aus."""
         stats = self.get_mismatch_stats()
 
-        print("\n" + "=" * 50)
-        print("Face Selection Summary")
-        print("=" * 50)
-        print(f"Total Events:     {stats['total']}")
-        print(f"Matches:          {stats['matches']}")
-        print(f"Mismatches:       {stats['mismatches']}")
-        print(f"Match Rate:       {stats['match_rate']:.1%}")
-        print(f"Session Duration: {stats['session_duration_sec']:.1f}s")
-        print("=" * 50 + "\n")
+        logger.info("=" * 50)
+        logger.info("Face Selection Summary")
+        logger.info("=" * 50)
+        logger.info(f"Total Events:     {stats['total']}")
+        logger.info(f"Matches:          {stats['matches']}")
+        logger.info(f"Mismatches:       {stats['mismatches']}")
+        logger.info(f"Match Rate:       {stats['match_rate']:.1%}")
+        logger.info(f"Session Duration: {stats['session_duration_sec']:.1f}s")
+        logger.info("=" * 50)
 
 
 # Globale Instanz

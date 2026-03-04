@@ -20,6 +20,45 @@ from config.feature_flags import is_enabled
 from gui.design_tokens import DesignTokens
 
 
+# Feature-Type Icons for browser tree
+_FEATURE_TYPE_ICONS = {
+    "EXTRUDE": "▲",
+    "REVOLVE": "↻",
+    "FILLET": "◠",
+    "CHAMFER": "◢",
+    "BOOLEAN": "∩",
+    "PUSHPULL": "⇕",
+    "SHELL": "◻",
+    "LOFT": "⋈",
+    "SWEEP": "⤳",
+    "TRANSFORM": "⬚",
+    "PATTERN": "⊞",
+    "HOLE": "⊙",
+    "DRAFT": "∠",
+    "SPLIT": "✂",
+    "THREAD": "⊛",
+    "HOLLOW": "◇",
+    "PRIMITIVE": "■",
+    "IMPORT": "⬇",
+    "CADQUERY": "⌨",
+    "SKETCH": "📐",
+}
+
+
+def _feature_type_icon(feature) -> str:
+    """Returns a type-specific icon character for the feature."""
+    ft = getattr(feature, 'type', None)
+    if ft is not None:
+        key = ft.name if hasattr(ft, 'name') else str(ft)
+        return _FEATURE_TYPE_ICONS.get(key, "↳")
+    # Fallback: try class name
+    cls_name = type(feature).__name__.upper()
+    for key, icon in _FEATURE_TYPE_ICONS.items():
+        if key in cls_name:
+            return icon
+    return "↳"
+
+
 def _safe_int(value, default: int = 0) -> int:
     """Defensive int conversion — returns default on None/non-numeric."""
     if value is None:
@@ -1105,7 +1144,7 @@ class ProjectBrowser(QFrame):
                 rb_idx = b.rollback_index if b.rollback_index is not None else len(b.features)
                 for fi_idx, f in enumerate(b.features):
                     rolled_back = fi_idx >= rb_idx
-                    prefix = "↳" if not rolled_back else "⊘"
+                    prefix = _feature_type_icon(f) if not rolled_back else "⊘"
                     color = "#777" if not rolled_back else "#444"
                     if hasattr(f, 'status') and f.status == "ERROR":
                         # W7: PAKET C - Color basierend auf status_class (Error-Envelope v2)

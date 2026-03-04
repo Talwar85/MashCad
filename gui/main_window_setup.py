@@ -684,8 +684,14 @@ class SetupMixin:
         view_menu.addSeparator()
         view_menu.addAction(self.log_dock.toggleViewAction())
 
+        # Edit Feature shortcut (Ctrl+E)
+        edit_menu.addSeparator()
+        edit_menu.addAction(tr("Edit Feature"), self._edit_selected_feature, "Ctrl+E")
+
         # Hilfe-Menü
         help_menu = mb.addMenu(tr("Help"))
+        help_menu.addAction(tr("Keyboard Shortcuts"), self._show_keyboard_shortcuts, "Ctrl+/")
+        help_menu.addSeparator()
         help_menu.addAction(tr("Language") + " / Sprache", self._change_language)
         help_menu.addSeparator()
         help_menu.addAction(tr("About MashCad"), self._show_about)
@@ -791,6 +797,20 @@ class SetupMixin:
             self.viewport_3d.point_to_point_cancelled.connect(self._on_point_to_point_cancelled)
 
         self.viewport_3d.transform_state = self.transform_state
+
+        # Context Menu Signale (Rechtsklick im 3D Viewport)
+        if hasattr(self.viewport_3d, 'context_edit_feature_requested'):
+            self.viewport_3d.context_edit_feature_requested.connect(
+                lambda feat, body: self._edit_feature(('feature', feat, body))
+            )
+        if hasattr(self.viewport_3d, 'context_hide_body_requested'):
+            self.viewport_3d.context_hide_body_requested.connect(
+                lambda body: self.browser._toggle_vis(body, 'body')
+            )
+        if hasattr(self.viewport_3d, 'context_delete_body_requested'):
+            self.viewport_3d.context_delete_body_requested.connect(
+                lambda body: self.browser._del_body(body)
+            )
         if hasattr(self.viewport_3d, '_transform_ctrl'):
             self.viewport_3d._transform_ctrl.transform_state = self.transform_state
 

@@ -70,7 +70,7 @@ class Build123dProfileDetector:
         scale = max(self.tolerance, 1e-9)
         return (round(x / scale), round(y / scale))
 
-    def _has_open_contours(self, lines, arcs) -> bool:
+    def _has_open_contours(self, lines, arcs, bezier_splines=None, native_splines=None) -> bool:
         """Reject sketches with unmatched open endpoints before OCP face creation."""
         endpoint_degree = {}
 
@@ -91,6 +91,19 @@ class Build123dProfileDetector:
             end_y = arc.center.y + arc.radius * math.sin(end_rad)
             add_endpoint(start_x, start_y)
             add_endpoint(end_x, end_y)
+
+        for spline in (bezier_splines or []):
+            if not spline.closed and len(spline.control_points) >= 2:
+                p0 = spline.control_points[0].point
+                pn = spline.control_points[-1].point
+                add_endpoint(p0.x, p0.y)
+                add_endpoint(pn.x, pn.y)
+
+        for spline in (native_splines or []):
+            sp = spline.start_point
+            ep = spline.end_point
+            add_endpoint(sp.x, sp.y)
+            add_endpoint(ep.x, ep.y)
 
         return any(degree % 2 != 0 for degree in endpoint_degree.values())
 
@@ -119,21 +132,25 @@ class Build123dProfileDetector:
         lines = [l for l in sketch.lines if not l.construction]
         circles = [c for c in sketch.circles if not c.construction]
         arcs = [a for a in sketch.arcs if not a.construction]
+        ellipses = [e for e in getattr(sketch, 'ellipses', []) if not e.construction]
+        bezier_splines = [s for s in getattr(sketch, 'splines', []) if not s.construction]
+        native_splines = [s for s in getattr(sketch, 'native_splines', []) if not s.construction]
 
-        if not lines and not circles and not arcs:
+        if not lines and not circles and not arcs and not ellipses and not bezier_splines and not native_splines:
             self._last_error = "Keine Geometrie im Sketch"
             return []
 
-        logger.debug(f"Profile-Detection: {len(lines)} Linien, {len(circles)} Kreise, {len(arcs)} Arcs")
+        logger.debug(f"Profile-Detection: {len(lines)} Linien, {len(circles)} Kreise, {len(arcs)} Arcs, "
+                     f"{len(ellipses)} Ellipsen, {len(bezier_splines)} BezierSplines, {len(native_splines)} NativeSplines")
 
-        if self._has_open_contours(lines, arcs):
+        if self._has_open_contours(lines, arcs, bezier_splines, native_splines):
             self._last_error = "Offene Konturen im Sketch"
             logger.debug(self._last_error)
             return []
 
         try:
             # Methode 1: Direkte Edge-basierte Face-Erkennung mit OCP
-            faces = self._detect_faces_ocp(lines, circles, arcs, plane)
+            faces = self._detect_faces_ocp(lines, circles, arcs, plane, ellipses, bezier_splines, native_splines)
 
             if faces:
                 logger.info(f"Build123d Profile-Detection: {len(faces)} Faces gefunden")
@@ -149,7 +166,7 @@ class Build123dProfileDetector:
             traceback.print_exc()
             return []
 
-    def _detect_faces_ocp(self, lines, circles, arcs, plane) -> List['Face']:
+    def _detect_faces_ocp(self, lines, circles, arcs, plane, ellipses=None, bezier_splines=None, native_splines=None) -> List['Face']:
         """
         Nutzt OCP/OpenCASCADE direkt für Face-Detection.
 
@@ -247,10 +264,99 @@ class Build123dProfileDetector:
                 except Exception as e:
                     logger.debug(f"Arc konnte nicht konvertiert werden: {e}")
 
+            # Ellipsen zu OCP Edges (geschlossene Kurven)
+            for ellipse in (ellipses or []):
+                try:
+                    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+                    from OCP.GC import GC_MakeEllipse
+                    from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir
+
+                    cx, cy = ellipse.center.x, ellipse.center.y
+                    rx, ry = ellipse.radius_x, ellipse.radius_y
+                    rotation = getattr(ellipse, 'rotation', 0.0)
+
+                    center = gp_Pnt(cx, cy, 0)
+                    rot_rad = math.radians(rotation)
+                    major_dir = gp_Dir(math.cos(rot_rad), math.sin(rot_rad), 0)
+                    axis = gp_Ax2(center, gp_Dir(0, 0, 1), major_dir)
+
+                    ellipse_maker = GC_MakeEllipse(axis, rx, ry)
+                    if ellipse_maker.IsDone():
+                        edge = BRepBuilderAPI_MakeEdge(ellipse_maker.Value()).Edge()
+                        ocp_edges.append(edge)
+                except Exception as e:
+                    logger.debug(f"Ellipse konnte nicht konvertiert werden: {e}")
+
+            # BezierSplines zu OCP Edges (kubische Bézier-Segmente)
+            for spline in (bezier_splines or []):
+                try:
+                    from OCP.Geom import Geom_BezierCurve
+                    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+                    from OCP.TColgp import TColgp_Array1OfPnt
+                    from OCP.gp import gp_Pnt
+
+                    cps = spline.control_points
+                    n_segments = len(cps) if spline.closed else len(cps) - 1
+
+                    for i in range(n_segments):
+                        p0 = cps[i]
+                        p1 = cps[(i + 1) % len(cps)]
+
+                        # Kubische Bézier: 4 Kontrollpunkte (P0, handle_out, handle_in, P1)
+                        poles = TColgp_Array1OfPnt(1, 4)
+                        poles.SetValue(1, gp_Pnt(p0.point.x, p0.point.y, 0))
+                        poles.SetValue(2, gp_Pnt(*p0.handle_out_abs, 0))
+                        poles.SetValue(3, gp_Pnt(*p1.handle_in_abs, 0))
+                        poles.SetValue(4, gp_Pnt(p1.point.x, p1.point.y, 0))
+
+                        bezier = Geom_BezierCurve(poles)
+                        edge = BRepBuilderAPI_MakeEdge(bezier).Edge()
+                        ocp_edges.append(edge)
+                except Exception as e:
+                    logger.debug(f"BezierSpline konnte nicht konvertiert werden: {e}")
+
+            # Native Splines (B-Spline/NURBS aus DXF) zu OCP Edges
+            for spline in (native_splines or []):
+                try:
+                    from OCP.Geom import Geom_BSplineCurve
+                    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+                    from OCP.TColgp import TColgp_Array1OfPnt
+                    from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
+                    from OCP.gp import gp_Pnt
+
+                    n = len(spline.control_points)
+                    if n < 2:
+                        continue
+
+                    poles = TColgp_Array1OfPnt(1, n)
+                    for i, (x, y) in enumerate(spline.control_points):
+                        poles.SetValue(i + 1, gp_Pnt(x, y, 0))
+
+                    weights = TColStd_Array1OfReal(1, n)
+                    for i, w in enumerate(spline.weights):
+                        weights.SetValue(i + 1, w)
+
+                    unique_knots = sorted(set(spline.knots))
+                    multiplicities = [spline.knots.count(k) for k in unique_knots]
+
+                    knots_arr = TColStd_Array1OfReal(1, len(unique_knots))
+                    mults_arr = TColStd_Array1OfInteger(1, len(unique_knots))
+                    for i, (k, m) in enumerate(zip(unique_knots, multiplicities)):
+                        knots_arr.SetValue(i + 1, k)
+                        mults_arr.SetValue(i + 1, m)
+
+                    curve = Geom_BSplineCurve(poles, weights, knots_arr, mults_arr, spline.degree)
+                    edge = BRepBuilderAPI_MakeEdge(curve).Edge()
+                    ocp_edges.append(edge)
+                except Exception as e:
+                    logger.debug(f"Native Spline konnte nicht konvertiert werden: {e}")
+
             if not ocp_edges:
                 return []
 
-            logger.debug(f"Build123d Profile-Detection: {len(lines)} Linien, {len(arcs)} Arcs → {len(ocp_edges)} OCP Edges")
+            logger.debug(f"Build123d Profile-Detection: {len(lines)} Linien, {len(arcs)} Arcs, "
+                        f"{len(ellipses or [])} Ellipsen, {len(bezier_splines or [])} BezierSplines, "
+                        f"{len(native_splines or [])} NativeSplines → {len(ocp_edges)} OCP Edges")
 
             # 2. ShapeAnalysis_FreeBounds für Wire-Erkennung
             edge_sequence = TopTools_HSequenceOfShape()

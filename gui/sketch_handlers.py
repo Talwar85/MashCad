@@ -4030,14 +4030,47 @@ class SketchHandlersMixin:
         self.status_message.emit(tr("Point") + f" ({pos.x():.1f}, {pos.y():.1f})")
     
     def _apply_constraint(self, ctype):
-        if not self.selected_lines: return
+        if not self.selected_lines:
+            self.status_message.emit(tr("No lines selected for constraint"))
+            return
         self._save_undo()
+        applied = 0
+        skipped = 0
         for l in self.selected_lines:
-            if ctype == 'horizontal': self.sketch.add_horizontal(l)
-            elif ctype == 'vertical': self.sketch.add_vertical(l)
-        self.sketch.solve()
+            try:
+                if ctype == 'horizontal':
+                    # Check if already horizontal
+                    dy = abs(l.end.y - l.start.y)
+                    if dy < 0.01:
+                        skipped += 1
+                        continue
+                    self.sketch.add_horizontal(l)
+                    applied += 1
+                elif ctype == 'vertical':
+                    # Check if already vertical
+                    dx = abs(l.end.x - l.start.x)
+                    if dx < 0.01:
+                        skipped += 1
+                        continue
+                    self.sketch.add_vertical(l)
+                    applied += 1
+            except Exception as e:
+                logger.debug(f"Constraint '{ctype}' failed on line: {e}")
+                skipped += 1
+
+        result = self.sketch.solve()
         self.sketched_changed.emit()
         self.update()
+
+        # Feedback
+        if applied > 0:
+            dof = getattr(result, 'dof', -1) if result else -1
+            msg = tr("{ctype} constraint applied to {n} line(s)").format(ctype=ctype.capitalize(), n=applied)
+            if dof >= 0:
+                msg += f" (DOF: {dof})"
+            self.status_message.emit(msg)
+        elif skipped > 0:
+            self.status_message.emit(tr("Lines already {ctype} — no change needed").format(ctype=ctype))
 
     # ==================== CANVAS (Bildreferenz) ====================
 
