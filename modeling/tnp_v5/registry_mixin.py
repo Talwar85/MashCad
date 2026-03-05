@@ -115,8 +115,6 @@ class RegistryMixin:
         self._shapes[shape_id.uuid] = record
         self._update_spatial_index(shape_id, record)
 
-        if is_enabled("tnp_debug_logging"):
-            logger.debug(f"[TNP v5.0] Shape registered: {shape_id}")
         return shape_id
 
     def seed_shape(self, shape_id: ShapeID, ocp_shape: Any) -> None:
